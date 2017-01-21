@@ -187,7 +187,7 @@ class Model:
   # @ut.timeit
   def _register_epoch(self, epoch, total_epochs, elapsed, sess):
     if is_stopping_point(epoch, total_epochs, FLAGS.save_every):
-      self.save(sess)
+      self._saver.save(sess, self.get_checkpoint_path())
 
     accuracy = 100000 * np.sqrt(self._epoch_stats['total_loss'] / np.prod(self._batch_shape) / FLAGS.epoch_size)
 
@@ -210,10 +210,6 @@ class Model:
     self.print_epoch_info(accuracy, epoch, total_epochs, elapsed)
     if epoch + 1 != total_epochs:
       self._epoch_stats = self._get_stats_template()
-
-  @ut.timeit
-  def save(self, sess):
-    self._saver.save(sess, self.get_checkpoint_path())
 
   # @ut.timeit
   def _get_visual_set(self):
