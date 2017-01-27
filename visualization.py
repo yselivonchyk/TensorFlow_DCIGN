@@ -207,7 +207,7 @@ def visualize_cross_section(embeddings, fig=None):
       _plot_single_cross_section(embeddings, [i, j], subplot)
 
   if features >= 3:
-    embeddings = embeddings[:1000]
+    # embeddings = embeddings[:1000]
     pos = (size+1)*size - size + 1
     subplot = plt.subplot(size+1, size, pos)
     _plot_single_cross_section(embeddings, [0, 1], subplot)

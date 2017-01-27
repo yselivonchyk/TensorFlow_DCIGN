@@ -48,7 +48,7 @@ def _declamp_grad(vae_grad, reco_grad, filter):
   return res
 
 
-class IGN_model(m.Model):
+class IGNModel(m.Model):
   model_id = 'ign'
   decoder_scope = 'dec'
   encoder_scope = 'enc'
@@ -90,7 +90,7 @@ class IGN_model(m.Model):
                weight_init=None,
                activation=act.sigmoid,
                optimizer=tf.train.AdamOptimizer):
-    super(IGN_model, self).__init__()
+    super(IGNModel, self).__init__()
     FLAGS.batch_size = FLAGS.sequence_length
     self._weight_init = weight_init
     self._activation = activation
@@ -102,12 +102,12 @@ class IGN_model(m.Model):
     return [self.layer_encoder, self.layer_narrow, self.layer_decoder]
 
   def get_meta(self, meta=None):
-    meta = super(IGN_model, self).get_meta(meta=meta)
+    meta = super(IGNModel, self).get_meta(meta=meta)
     meta['div'] = FLAGS.gradient_proportion
     return meta
 
   def load_meta(self, save_path):
-    meta = super(IGN_model, self).load_meta(save_path)
+    meta = super(IGNModel, self).load_meta(save_path)
     self._weight_init = meta['init']
     self._optimizer = tf.train.AdadeltaOptimizer \
       if 'Adam' in meta['opt'] \
@@ -272,7 +272,7 @@ if __name__ == '__main__':
   epochs = 300
   import sys
 
-  model = IGN_model()
+  model = IGNModel()
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
   if len(args) == 0:
     global DEV

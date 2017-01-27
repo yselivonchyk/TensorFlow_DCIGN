@@ -41,6 +41,7 @@ def get_action_data(folder):
   res = [x[3][:2] for x in action_data]
   return np.abs(np.asarray(res))
 
+
 def read_ds_zip(path):
   dep, img = {}, {}
   tar = tarfile.open(path, "r:gz")

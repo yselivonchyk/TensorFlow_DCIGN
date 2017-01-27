@@ -18,14 +18,14 @@ import prettytensor.bookkeeper as bookkeeper
 import deconv
 from tensorflow.python.ops import gradients
 from prettytensor.tutorial import data_utils
-import IGN_model
+import IGNModel
 
 FLAGS = tf.app.flags.FLAGS
 
 DEV = False
 
 
-class DCIGN_model(IGN_model.IGN_model):
+class DCIGNModel(IGNModel.IGNModel):
   model_id = 'dcign'
 
   def _build_encoder(self):
@@ -104,7 +104,7 @@ if __name__ == '__main__':
   FLAGS.save_encodings_every = 2
 
 
-  model = DCIGN_model()
+  model = DCIGNModel()
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
   if len(args) == 0:
     global DEV

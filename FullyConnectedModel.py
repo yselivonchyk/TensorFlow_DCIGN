@@ -28,7 +28,7 @@ def _get_stats_template():
   }
 
 
-class FF_model(Model.Model):
+class FullyConnected(Model.Model):
   model_id = 'do'
   decoder_scope = 'dec'
   encoder_scope = 'enc'
@@ -71,12 +71,12 @@ class FF_model(Model.Model):
     return self.layers
 
   def get_meta(self, meta=None):
-    meta = super(FF_model, self).get_meta(meta=meta)
+    meta = super(FullyConnected, self).get_meta(meta=meta)
     # meta['seq'] = FLAGS.stride
     return meta
 
   def load_meta(self, save_path):
-    meta = super(FF_model, self).load_meta(save_path)
+    meta = super(FullyConnected, self).load_meta(save_path)
     self._weight_init = meta['init']
     self._optimizer = tf.train.AdadeltaOptimizer \
       if 'Adam' in meta['opt'] \
@@ -111,9 +111,6 @@ class FF_model(Model.Model):
     for i in range(self.layer_narrow + 1):
       size, desc = self.layers[i], 'enc_hidden_%d' % i
       self._encode = self._encode.fully_connected(size, name=desc)
-      if i == self.layer_narrow-1 or i == self.layer_narrow-2:
-        ut.print_info('Dropout. layer:%d, layer_size:%d, DO_value:%f' % (i, self.layers[i], 1.0-FLAGS.dropout))
-        self._encode = self._encode.dropout(1.0-FLAGS.dropout)
 
   def _build_decoder(self, weight_init=tf.truncated_normal):
     narrow, layers = self.layers[self.layer_narrow], self.layers[self.layer_narrow+1:]
@@ -124,6 +121,9 @@ class FF_model(Model.Model):
     for i, size in enumerate(layers):
       start = self._decode if i != 0 else self._encode
       self._decode = start.fully_connected(size, name='enc_hidden_%d' % i)
+
+    self._decode = self._decode.dropout(1.0 - FLAGS.dropout)
+    ut.print_info('Dropout applied to the last layer of the network: %f' % (1. - FLAGS.dropout))
 
     self._decode = (self._decode
         .fully_connected(np.prod(self._image_shape), init=weight_init, name='output')
@@ -139,6 +139,7 @@ class FF_model(Model.Model):
     self.dataset = inp.read_ds_zip(FLAGS.input_path)
     if DEV:
       self.dataset = self.dataset[:FLAGS.batch_size*5]
+      print('Dataset cropped')
 
     shape = list(self.dataset.shape)
     FLAGS.epoch_size = int(shape[0] / FLAGS.batch_size)
@@ -150,6 +151,8 @@ class FF_model(Model.Model):
     self._image_shape = list(self.dataset.shape)[1:]
 
     self.test_set = inp.read_ds_zip(FLAGS.test_path)
+    if DEV:
+      self.test_set = self.test_set[:FLAGS.batch_size*2]
     test_max = int(FLAGS.test_max) if FLAGS.test_max >= 1 else int(FLAGS.test_max*len(self.test_set))
     self.test_set = self.test_set[0:test_max]
     self.test_set = inp.rescale_ds(self.test_set, self._activation.min, self._activation.max)
@@ -229,8 +232,9 @@ class FF_model(Model.Model):
 if __name__ == '__main__':
   # FLAGS.load_from_checkpoint = './tmp/doom_bs__act|sigmoid__bs|20__h|500|5|500__init|na__inp|cbd4__lr|0.0004__opt|AO'
   import sys
+  print(tf.__version__)
 
-  model = FF_model()
+  model = FullyConnected()
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
   print(args)
   if len(args) <= 1:

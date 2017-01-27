@@ -27,7 +27,7 @@ tf.app.flags.DEFINE_string('load_from_checkpoint', None, 'Load model state from 
 
 tf.app.flags.DEFINE_integer('max_epochs', 20, 'Train for at most this number of epochs')
 tf.app.flags.DEFINE_integer('epoch_size', 100, 'Number of batches per epoch')
-tf.app.flags.DEFINE_integer('save_every', 100, 'Save model state every INT epochs')
+tf.app.flags.DEFINE_integer('save_every', 1000, 'Save model state every INT epochs')
 tf.app.flags.DEFINE_integer('save_encodings_every', 50, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 
