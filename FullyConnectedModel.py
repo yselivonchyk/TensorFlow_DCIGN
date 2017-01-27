@@ -1,16 +1,16 @@
-"""MNIST Autoencoder. """
+"""
+Fully-connected sparse Auto-Encoder for image data
+"""
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
-import json, os, re, math
 import numpy as np
 import utils as ut
 import input as inp
-import tools.checkpoint_utils as ch_utils
 import activation_functions as act
-import visualization as vis
-import prettytensor as pt
 import Model
 import time
+import tensorflow.contrib.slim as slim
+
 
 tf.app.flags.DEFINE_integer('stride', 1, 'Data is permuted in series of INT consecutive inputs')
 FLAGS = tf.app.flags.FLAGS
@@ -28,23 +28,18 @@ def _get_stats_template():
   }
 
 
-class FullyConnected(Model.Model):
-  model_id = 'do'
-  decoder_scope = 'dec'
-  encoder_scope = 'enc'
+class FullyConnectedModel(Model.Model):
+  model_id = 'fc'
 
   layers = [40, 6, 40]
   layer_narrow = 1
 
-  _image_shape = None
   _batch_shape = None
 
   # placeholders
   _input = None
   _encoding = None
-
   _reconstruction = None
-
 
   # operations
   _encode = None
@@ -71,12 +66,12 @@ class FullyConnected(Model.Model):
     return self.layers
 
   def get_meta(self, meta=None):
-    meta = super(FullyConnected, self).get_meta(meta=meta)
+    meta = super(FullyConnectedModel, self).get_meta(meta=meta)
     # meta['seq'] = FLAGS.stride
     return meta
 
   def load_meta(self, save_path):
-    meta = super(FullyConnected, self).load_meta(save_path)
+    meta = super(FullyConnectedModel, self).load_meta(save_path)
     self._weight_init = meta['init']
     self._optimizer = tf.train.AdadeltaOptimizer \
       if 'Adam' in meta['opt'] \
@@ -87,32 +82,20 @@ class FullyConnected(Model.Model):
     ut.configure_folders(FLAGS, self.get_meta())
     return meta
 
-  # MODEL
-
+  @ut.timeit
   def build_model(self):
-    with tf.device('/cpu:0'):
-      tf.reset_default_graph()
-      self._current_step = tf.Variable(0, trainable=False, name='global_step')
-      self._step = tf.assign(self._current_step, self._current_step + 1)
-      with pt.defaults_scope(activation_fn=self._activation.func):
-        with pt.defaults_scope(phase=pt.Phase.train):
-          with tf.variable_scope(self.encoder_scope):
-            self._build_encoder()
-          with tf.variable_scope(self.decoder_scope):
-            self._build_decoder()
-
-  def _build_encoder(self):
     """Construct encoder network: placeholders, operations, optimizer"""
+    # Global step
+    tf.reset_default_graph()
+    self._current_step = tf.Variable(self.get_initializers('global_step'), trainable=False, name='global_step')
+    self._step = tf.assign(self._current_step, self._current_step + 1)
+    # Encoder
     self._input = tf.placeholder(tf.float32, self._batch_shape, name='input')
-
-    self._encode = (pt.wrap(self._input)
-                    .flatten())
-
+    self._encode = slim.flatten(self._input)
     for i in range(self.layer_narrow + 1):
       size, desc = self.layers[i], 'enc_hidden_%d' % i
-      self._encode = self._encode.fully_connected(size, name=desc)
-
-  def _build_decoder(self, weight_init=tf.truncated_normal):
+      self._encode = slim.fully_connected(self._encode, size, scope=desc)
+    # Decoder
     narrow, layers = self.layers[self.layer_narrow], self.layers[self.layer_narrow+1:]
 
     self._encoding = tf.placeholder(tf.float32, (FLAGS.batch_size, narrow), name='encoding')
@@ -120,17 +103,15 @@ class FullyConnected(Model.Model):
 
     for i, size in enumerate(layers):
       start = self._decode if i != 0 else self._encode
-      self._decode = start.fully_connected(size, name='enc_hidden_%d' % i)
+      self._decode = slim.fully_connected(start, size, scope=desc, activation_fn=tf.nn.sigmoid, name=desc)
 
-    self._decode = self._decode.dropout(1.0 - FLAGS.dropout)
+    self._decode = slim.dropout(self._decode, 1.0 - FLAGS.dropout, is_training=True, scope='dropout3')
     ut.print_info('Dropout applied to the last layer of the network: %f' % (1. - FLAGS.dropout))
-
-    self._decode = (self._decode
-        .fully_connected(np.prod(self._image_shape), init=weight_init, name='output')
-        .reshape(self._batch_shape))
-
+    self._decode = slim.fully_connected(self._decode, int(np.prod(self._image_shape)), scope='output')
     self._reco_loss = self._build_reco_loss(self._reconstruction)
-    self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate)
+    self._decode = tf.reshape(self._decode, self._batch_shape, name='reshape')
+    # Optimizer
+    self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate/10000)
     self._train = self._optimizer.minimize(self._reco_loss)
 
   # DATA
@@ -152,16 +133,21 @@ class FullyConnected(Model.Model):
 
     self.test_set = inp.read_ds_zip(FLAGS.test_path)
     if DEV:
-      self.test_set = self.test_set[:FLAGS.batch_size*2]
+      self.test_set = self.test_set[:FLAGS.batch_size*5]
+      print()
     test_max = int(FLAGS.test_max) if FLAGS.test_max >= 1 else int(FLAGS.test_max*len(self.test_set))
     self.test_set = self.test_set[0:test_max]
     self.test_set = inp.rescale_ds(self.test_set, self._activation.min, self._activation.max)
 
-
-  def _get_epoch_dataset(self):
-    train_set = np.random.permutation(self._get_blurred_dataset())
-    feed = pt.train.feed_numpy(FLAGS.batch_size, train_set, train_set)
-    return feed
+  def _batch_generator(self, dataset=None, shuffle=True):
+    dataset = dataset if dataset is not None else self._get_blurred_dataset()
+    permutation = np.arange(len(dataset))
+    permutation = permutation if not shuffle else np.random.permutation(permutation)
+    total_batches = int(len(dataset) / FLAGS.batch_size)
+    for i in range(total_batches):
+      batch_indexes = permutation[i*FLAGS.batch_size:(i+1)*FLAGS.batch_size]
+      batch = dataset[batch_indexes]
+      yield batch, batch
 
   def set_layer_sizes(self, h):
     if isinstance(h, str):
@@ -184,36 +170,30 @@ class FullyConnected(Model.Model):
     self._register_training_start()
 
     with tf.Session() as sess:
-      sess.run(tf.initialize_all_variables())
-      self._saver = tf.train.Saver()
-
-      if FLAGS.load_state and os.path.exists(self.get_checkpoint_path()):
-        self._saver.restore(sess, self.get_checkpoint_path())
-        ut.print_info('Restored requested. Previous epoch: %d' % self.get_past_epochs(), color=31)
+      sess.run(tf.global_variables_initializer())
+      self.restore_model(sess)
 
       # MAIN LOOP
       for current_epoch in xrange(epochs_to_train):
         start = time.time()
-        feed = self._get_epoch_dataset()
-        for _, batch in enumerate(feed):
-          encoding, reconstruction, loss, _, _ = sess.run(
+        for batch in self._batch_generator():
+          encoding, reconstruction, loss, _, step = sess.run(
             [self._encode, self._decode, self._reco_loss, self._train, self._step],
             feed_dict={self._input: batch[0], self._reconstruction: batch[0]})
 
           self._register_batch(loss)
         self._register_epoch(current_epoch, epochs_to_train, time.time()-start, sess)
-      self._writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph)
+      self._writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
       meta = self._register_training()
     return meta, self._stats['epoch_accuracy']
 
   def evaluate(self, sess, take):
     encoded, reconstructed = None, None
     blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
-    for i in range(int(len(self.test_set)/FLAGS.batch_size)):
-      batch = blurred[i*FLAGS.batch_size: (i+1)*FLAGS.batch_size]
+    for batch in self._batch_generator(blurred, shuffle=None):
       encoding, reconstruction = sess.run(
         [self._encode, self._decode],
-        feed_dict={self._input: batch})
+        feed_dict={self._input: batch[0]})
       encoded = self._concatenate(encoded, encoding)
       reconstructed = self._concatenate(reconstructed, reconstruction, take=take)
     return encoded, reconstructed, blurred
@@ -230,35 +210,16 @@ class FullyConnected(Model.Model):
 
 
 if __name__ == '__main__':
-  # FLAGS.load_from_checkpoint = './tmp/doom_bs__act|sigmoid__bs|20__h|500|5|500__init|na__inp|cbd4__lr|0.0004__opt|AO'
   import sys
-  print(tf.__version__)
 
-  model = FullyConnected()
+  model = FullyConnectedModel()
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
   print(args)
   if len(args) <= 1:
     DEV = True
     ut.print_info('DEV mode', color=33)
-    args['input'] = '/home/eugene/repo/data/tmp/romb8.3.6.tar.gz'
     FLAGS.blur = 0.0
-    ut.print_info(args['input'],  color=33)
 
-  if 'suffix' in args:
-    FLAGS.suffix = args['suffix']
-  # if 'input' in args:
-  #   if args['input'][0] != '/':
-  #     args['input'] = '/' + args['input']
-  #   if 'tmp' not in args['input']:
-  #     args['input'] = '/tmp' + args['input']
-  #   args['input'] = '../data' + args['input']
-  #   FLAGS.input_path = args['input']
-  #   ut.print_info('input: %s' % FLAGS.input_path, color=36)
   if 'h' in args:
     model.set_layer_sizes(args['h'])
-
-  all_data = [x[0] for x in os.walk( '../data/tmp_grey/') if 'img' in x[0]]
-  # for _, path in enumerate(all_data):
-  #   print(path)
-  #   FLAGS.input_path = path
   model.train(FLAGS.max_epochs)

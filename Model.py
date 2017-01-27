@@ -4,31 +4,29 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
-import json, os, re, math
+import json
+import os
 import numpy as np
 import utils as ut
 import input as inp
 import tools.checkpoint_utils as ch_utils
-import activation_functions as act
 import visualization as vis
-import prettytensor as pt
 import time
 
 
 tf.app.flags.DEFINE_string('suffix', 'run', 'Suffix to use to distinguish models by purpose')
-tf.app.flags.DEFINE_string('input_path', '../data/tmp/romb8.3.6.tar.gz', 'input folder')
-tf.app.flags.DEFINE_string('test_path', '../data/tmp/romb8.3.6.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_float('test_max', 0.3, 'max numer of exampes in the test set')
+tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
+tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
+tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
 tf.app.flags.DEFINE_string('save_path', './tmp/checkpoint', 'Where to save the model checkpoints.')
 tf.app.flags.DEFINE_string('logdir', '', 'where to save logs.')
 tf.app.flags.DEFINE_string('load_from_checkpoint', None, 'Load model state from particular checkpoint')
 
-tf.app.flags.DEFINE_integer('max_epochs', 20, 'Train for at most this number of epochs')
+tf.app.flags.DEFINE_integer('max_epochs', 4, 'Train for at most this number of epochs')
 tf.app.flags.DEFINE_integer('epoch_size', 100, 'Number of batches per epoch')
 tf.app.flags.DEFINE_integer('save_every', 1000, 'Save model state every INT epochs')
-tf.app.flags.DEFINE_integer('save_encodings_every', 50, 'Save encoding and visualizations every')
+tf.app.flags.DEFINE_integer('save_encodings_every', 2, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 
 tf.app.flags.DEFINE_integer('batch_size', 64, 'Batch size')
@@ -40,6 +38,7 @@ tf.app.flags.DEFINE_float('blur', 5.0, 'Max sigma value for Gaussian blur applie
 tf.app.flags.DEFINE_integer('blur_decrease', 50000, 'Decrease image blur every X steps')
 
 FLAGS = tf.app.flags.FLAGS
+slim = tf.contrib.slim
 
 DEV = False
 
@@ -88,7 +87,8 @@ class Model:
     pass
 
   def _build_reco_loss(self, output_placeholder):
-    return self._decode.flatten().l2_regression(pt.wrap(output_placeholder).flatten())
+    error = self._decode - slim.flatten(output_placeholder)
+    return tf.nn.l2_loss(error, name='reco_loss')
 
   def train(self, epochs_to_train=5):
     pass
@@ -153,12 +153,13 @@ class Model:
   def get_past_epochs(self):
     return int(self._current_step.eval() / FLAGS.epoch_size)
 
-  def get_checkpoint_path(self):
+  @staticmethod
+  def get_checkpoint_path():
     return os.path.join(FLAGS.save_path, '-9999.chpt')
 
   # OUTPUTS
-
-  def _get_stats_template(self):
+  @staticmethod
+  def _get_stats_template():
     return {
       'batch': [],
       'input': [],
@@ -184,6 +185,15 @@ class Model:
 
   MAX_IMAGES = 10
 
+  @ut.timeit
+  def restore_model(self, session):
+    self._saver = tf.train.Saver()
+    latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10])
+    print(latest_checkpoint)
+    if FLAGS.load_state and latest_checkpoint is not None:
+      # self._saver.restore(session, latest_checkpoint)
+      ut.print_info('Restored requested. Previous epoch: %d' % self.get_past_epochs(), color=31)
+
   # @ut.timeit
   def _register_epoch(self, epoch, total_epochs, elapsed, sess):
     if is_stopping_point(epoch, total_epochs, FLAGS.save_every):
@@ -203,20 +213,13 @@ class Model:
       projection_file = ut.to_file_name(meta, FLAGS.save_path)
       st = time.time()
       np.save(projection_file, data)
-      vis.visualize_encoding_cross(digest[0], FLAGS.save_path, meta, data['blu'], data['rec'])
+      vis.visualize_encoding_cross(data['enc'], FLAGS.save_path, meta, data['blu'], data['rec'])
       # print('visualize+save:%f' % (time.time() - st))
 
     self._stats['epoch_accuracy'].append(accuracy)
     self.print_epoch_info(accuracy, epoch, total_epochs, elapsed)
     if epoch + 1 != total_epochs:
       self._epoch_stats = self._get_stats_template()
-
-  # @ut.timeit
-  def _get_visual_set(self):
-    r_permutation = self._epoch_stats['permutation_reverse']
-    visual_set_indexes = r_permutation[self._stats['visual_set']]
-    visual_set = np.vstack(self._epoch_stats['reconstruction'])[visual_set_indexes]
-    return visual_set
 
   @ut.timeit
   def _register_training(self):
