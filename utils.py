@@ -340,11 +340,14 @@ def concatenate(x, y, take=None):
 
 # MISC
 
-def print_model_info():
-  for v in tf.get_collection(tf.GraphKeys.VARIABLES):
-    print(v.name, v.get_shape())
-  for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
-    print(v.name, v.get_shape())
+def print_model_info(trainable=False):
+  if not trainable:
+    for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES):
+      print(v.name, v.get_shape())
+  else:
+    for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+      value = v.eval()
+      print('TRAINABLE_VARIABLES', v.name, v.get_shape(), 'm:%.4f v:%.4f' % (value.mean(), value.std()))
 
 
 def list_checkpoint_vars(folder):

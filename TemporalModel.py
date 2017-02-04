@@ -39,7 +39,7 @@ def _get_stats_template():
 
 
 class TemporalModel(Model.Model):
-  model_id = 're11bn'
+  model_id = 'plain_sigmoid'
 
   layers = [32, 32]
   dataset = None
@@ -95,35 +95,7 @@ class TemporalModel(Model.Model):
 
   def build_model(self):
     """Construct encoder network: placeholders, operations, optimizer"""
-    # Global step
-    tf.reset_default_graph()
-    self._current_step = tf.Variable(0, trainable=False, name='global_step')
-    self._step = tf.assign(self._current_step, self._current_step + 1)
-    # Encoder
-    self._input = tf.placeholder(tf.float32, self._batch_shape, name='input')
-    img1, img2 = self._input[:,0,:], self._input[:,1,:]
-    self._encode = slim.flatten(img1)
-    narrow_index = np.argmin(self.layers)
-    for i in range(narrow_index + 1):
-      size, desc = self.layers[i], 'enc_hidden_%d' % i
-      self._encode = slim.fully_connected(self._encode, size, scope=desc)
-    # Decoder
-    narrow, layers = self.layers[narrow_index], self.layers[narrow_index+1:]
-
-    self._reconstruction = tf.placeholder(tf.float32, self._batch_shape)
-
-    for i, size in enumerate(layers):
-      start, desc = self._decode if i != 0 else self._encode,  'dec_hidden_%d' % i
-      self._decode = slim.fully_connected(start, size, scope=desc, activation_fn=tf.nn.sigmoid)
-
-    self._decode = slim.dropout(self._decode, 1.0 - FLAGS.dropout, is_training=True, scope='dropout3')
-    ut.print_info('Dropout applied to the last layer of the network: %f' % (1. - FLAGS.dropout))
-    self._decode = slim.fully_connected(self._decode, int(np.prod(self.get_image_shape())), scope='output')
-    self._reco_loss = self._build_reco_loss(self._reconstruction)
-    self._decode = tf.reshape(self._decode, self._batch_shape, name='reshape')
-    # Optimizer
-    self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate/10)
-    self._train = self._optimizer.minimize(self._reco_loss)
+    pass
 
   def build_shift_model(self):
     """
@@ -141,10 +113,18 @@ class TemporalModel(Model.Model):
     self._input = tf.placeholder(tf.float32, self._batch_shape, name='input')
     img1, img2 = self._input[:,0,:], self._input[:,1,:]
 
-    net = None
+    net = slim.conv2d(img1, self.layers[0], [1, 1], scope='conv_stem',
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True})
     for i, l in enumerate(self.layers):
-      source = img1 if i == 0 else net
-      net = slim.conv2d(source, l, [3, 3], scope='conv_%d' % i, normalizer_fn=slim.batch_norm)
+      source = net
+      net = slim.conv2d(source, l, [1, 1], scope='conv_%d_1' % i,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True})
+      net = slim.conv2d(net, l, [3, 3], scope='conv_%d_2' % i,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True})
+      net = tf.add(net, source)
     net = slim.conv2d(net, 4, [1, 1], scope='conv_out', normalizer_fn=None)
     self._encode = net
     self._decode = net
@@ -224,28 +204,29 @@ class TemporalModel(Model.Model):
             feed_dict={self._input: batch[0], self._reconstruction: batch[0]})
 
           self._register_batch(loss, batch, encoding, reconstruction, step)
+          # ut.print_model_info(trainable=True)
         self._register_epoch(current_epoch, epochs_to_train, time.time()-start, sess)
       self._writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
       meta = self._register_training()
     return meta, self._stats['epoch_accuracy']
 
   def evaluate(self, sess, take):
-    encoded, reconstructed = None, None
+    encoded, reconstructed, data = None, None, None
     blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
     for batch in self._batch_generator(blurred, shuffle=False):
       encoding, reconstruction = sess.run(
         [self._encode, self._decode],
         feed_dict={self._input: batch[0]})
-      encoded = ut.concatenate(encoded, encoding)
-      vis.plot_reconstruction(batch[0][:,0], reconstruction, interactive=True)
       # random images for reconstruction
+      # encoded = ut.concatenate(encoded, encoding)
       if FLAGS.test_size > take:
         reconstructed = ut.concatenate(reconstructed, np.asarray([reconstruction[0]]))
+        data = ut.concatenate(data,  np.asarray([batch[0][0,0]]))
       else:
         reconstructed = ut.concatenate(reconstructed, reconstruction, take=take)
-    if FLAGS.test_size > take:
-      reconstructed = np.random.permutation(reconstructed)[:take]
-    return encoded, reconstructed, blurred
+        data = blurred
+    permutation = np.random.permutation(np.arange(len(reconstructed)))[:take]
+    return encoded, reconstructed[permutation], data[permutation]
 
   def _register_epoch(self, epoch, total_epochs, elapsed, sess):
     if Model.is_stopping_point(epoch, total_epochs, FLAGS.save_every):
@@ -276,6 +257,7 @@ if __name__ == '__main__':
   print(args)
   FLAGS.blur_decrease = 1000
   FLAGS.blur = 1.0
+  FLAGS.learning_rate = FLAGS.learning_rate/3
   if len(args) <= 1:
     FLAGS.max_epochs = 50
     FLAGS.save_encodings_every = 1

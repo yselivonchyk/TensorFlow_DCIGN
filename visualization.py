@@ -181,6 +181,7 @@ def stitch_side_by_side(original, reconstruction, proportion=1):
 
 def _stitch_images(*args):
   """Recieves one or many arrays of pictures and stitches them alongside into a column picture"""
+  assert len(args) == 2
   lines, height, width, channels = args[0].shape
   min = 0  # int(args[0].mean())
 
