@@ -1,14 +1,17 @@
 """
-Fully-connected sparse Auto-Encoder for image data
+This class contains the code to recreate FullyConnected model with TF12\slim
+using checkpoint of TF8\prettytensor.
 """
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
+import os
 import numpy as np
 import utils as ut
 import input as inp
 import activation_functions as act
 import Model
 import time
+import tools.checkpoint_utils as chut
 import tensorflow.contrib.slim as slim
 
 
@@ -28,11 +31,11 @@ def _get_stats_template():
   }
 
 
-class FullyConnectedModel(Model.Model):
+class TemporalModel(Model.Model):
   model_id = 'fc'
 
-  layers = [40, 6, 40]
-  layer_narrow = 1
+  layers = [3000,50,5,50]
+  layer_narrow = 2
 
   _batch_shape = None
 
@@ -66,12 +69,12 @@ class FullyConnectedModel(Model.Model):
     return self.layers
 
   def get_meta(self, meta=None):
-    meta = super(FullyConnectedModel, self).get_meta(meta=meta)
+    meta = super(TemporalModel, self).get_meta(meta=meta)
     # meta['seq'] = FLAGS.stride
     return meta
 
   def load_meta(self, save_path):
-    meta = super(FullyConnectedModel, self).load_meta(save_path)
+    meta = super(TemporalModel, self).load_meta(save_path)
     self._weight_init = meta['init']
     self._optimizer = tf.train.AdadeltaOptimizer \
       if 'Adam' in meta['opt'] \
@@ -87,14 +90,19 @@ class FullyConnectedModel(Model.Model):
     """Construct encoder network: placeholders, operations, optimizer"""
     # Global step
     tf.reset_default_graph()
-    self._current_step = tf.Variable(0, trainable=False, name='global_step')
+    self._current_step = tf.Variable(self.get_initializers('global_step'), trainable=False, name='global_step')
     self._step = tf.assign(self._current_step, self._current_step + 1)
     # Encoder
     self._input = tf.placeholder(tf.float32, self._batch_shape, name='input')
     self._encode = slim.flatten(self._input)
     for i in range(self.layer_narrow + 1):
       size, desc = self.layers[i], 'enc_hidden_%d' % i
-      self._encode = slim.fully_connected(self._encode, size, scope=desc)
+      w_init, b_init = self.get_initializers('enc', i)
+      # self._encode = slim.fully_connected(self._encode, size, scope=desc)
+      self._encode = slim.fully_connected(self._encode, num_outputs=size, scope=desc,
+                                          activation_fn=tf.nn.sigmoid,
+                                          weights_initializer=w_init,
+                                          biases_initializer=b_init)
     # Decoder
     narrow, layers = self.layers[self.layer_narrow], self.layers[self.layer_narrow+1:]
 
@@ -103,16 +111,38 @@ class FullyConnectedModel(Model.Model):
 
     for i, size in enumerate(layers):
       start = self._decode if i != 0 else self._encode
-      self._decode = slim.fully_connected(start, size, scope=desc, activation_fn=tf.nn.sigmoid, name=desc)
+      w_init, b_init = self.get_initializers('dec', i)
+      desc = 'dec_hidden_%d' % i
+      print(size)
+      self._decode = slim.fully_connected(start, size, scope=desc,
+                                          activation_fn=tf.nn.sigmoid,
+                                          weights_initializer=w_init,
+                                          biases_initializer=b_init)
 
     self._decode = slim.dropout(self._decode, 1.0 - FLAGS.dropout, is_training=True, scope='dropout3')
     ut.print_info('Dropout applied to the last layer of the network: %f' % (1. - FLAGS.dropout))
-    self._decode = slim.fully_connected(self._decode, int(np.prod(self._image_shape)), scope='output')
+    w_init, b_init = self.get_initializers('output', i)
+    # self._decode = slim.fully_connected(self._decode, int(np.prod(self._image_shape)), scope='output')
+    self._decode = slim.fully_connected(self._decode, int(np.prod(self._image_shape)), scope='output',
+                                        activation_fn=tf.nn.sigmoid,
+                                        weights_initializer=w_init,
+                                        biases_initializer=b_init)
     self._reco_loss = self._build_reco_loss(self._reconstruction)
     self._decode = tf.reshape(self._decode, self._batch_shape, name='reshape')
     # Optimizer
     self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate/10000)
     self._train = self._optimizer.minimize(self._reco_loss)
+
+  def get_initializers(self, name, index=None):
+    self.old_checkpoint = self.get_checkpoint_path()
+    if name == 'global_step':
+      print('global_step', chut.load_variable(self.old_checkpoint, name))
+      return chut.load_variable(self.old_checkpoint, name)
+    name = '%s/enc_hidden_%d/' % (name, index) if name != 'output' else 'dec/output/'
+    w = chut.load_variable(self.old_checkpoint, name + 'weights')
+    b = np.reshape(chut.load_variable(self.old_checkpoint, name + 'bias'), (len(w[0])))
+    print(name + 'weights', w.shape, b.shape, index)
+    return tf.constant_initializer(w), tf.constant_initializer(b)
 
   # DATA
   @ut.timeit
@@ -210,9 +240,12 @@ class FullyConnectedModel(Model.Model):
 
 
 if __name__ == '__main__':
+  # FLAGS.load_from_checkpoint = './tmp/doom_bs__act|sigmoid__bs|20__h|500|5|500__init|na__inp|cbd4__lr|0.0004__opt|AO'
+  # print('\n'.join([str(x) for x in chut.list_variables('./tmp/run_do__a|s__do|0.__h|3000|50|5|50__inp|grid03.14/-9999.chpt') if 'Adam' not in x[0]]))
   import sys
+  print(tf.__version__)
 
-  model = FullyConnectedModel()
+  model = TemporalModel()
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
   print(args)
   if len(args) <= 1:
@@ -220,6 +253,21 @@ if __name__ == '__main__':
     ut.print_info('DEV mode', color=33)
     FLAGS.blur = 0.0
 
+  if 'suffix' in args:
+    FLAGS.suffix = args['suffix']
+  # if 'input' in args:
+  #   if args['input'][0] != '/':
+  #     args['input'] = '/' + args['input']
+  #   if 'tmp' not in args['input']:
+  #     args['input'] = '/tmp' + args['input']
+  #   args['input'] = '../data' + args['input']
+  #   FLAGS.input_path = args['input']
+  #   ut.print_info('input: %s' % FLAGS.input_path, color=36)
   if 'h' in args:
     model.set_layer_sizes(args['h'])
+
+  all_data = [x[0] for x in os.walk( '../data/tmp_grey/') if 'img' in x[0]]
+  # for _, path in enumerate(all_data):
+  #   print(path)
+  #   FLAGS.input_path = path
   model.train(FLAGS.max_epochs)

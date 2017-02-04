@@ -11,6 +11,8 @@ import re
 import sys
 import tools.checkpoint_utils as ch_utils
 import subprocess as sp
+import warnings
+import functools
 
 
 
@@ -138,7 +140,7 @@ def images_to_uint8(func):
     if type(arr) == np.ndarray and arr.dtype != np.uint8 and len(arr.shape) >= 3:
       if np.min(arr) < 0:
         print('image array normalization: negative values')
-      if np.max(arr) < 4:
+      if np.max(arr) < 10:
         arr *= 255
       if arr.shape[-1] == 4 or arr.shape[-1] == 2:
         old_shape = arr.shape
@@ -323,6 +325,19 @@ def get_latest_file(folder="./visualizations/", filter=None):
   return latest_file
 
 
+def concatenate(x, y, take=None):
+  """
+  Stitches two np arrays together until maximum length, when specified
+  """
+  if take is not None and x is not None and len(x) >= take:
+    return x
+  if x is None:
+    res = y
+  else:
+    res = np.concatenate((x, y))
+  return res[:take] if take is not None else res
+
+
 # MISC
 
 def print_model_info():
@@ -369,6 +384,24 @@ def timeit(method):
         print('%r %2.2f sec' % (method.__name__, te-ts))
         return result
     return timed
+
+
+def deprecated(func):
+  '''This is a decorator which can be used to mark functions
+  as deprecated. It will result in a warning being emitted
+  when the function is used.'''
+
+  @functools.wraps(func)
+  def new_func(*args, **kwargs):
+    warnings.warn_explicit(
+      "Call to deprecated function {}.".format(func.__name__),
+      category=DeprecationWarning,
+      filename=func.func_code.co_filename,
+      lineno=func.func_code.co_firstlineno + 1
+    )
+    return func(*args, **kwargs)
+
+  return new_func
 
 
 import numpy as np

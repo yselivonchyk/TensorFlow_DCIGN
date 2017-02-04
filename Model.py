@@ -12,8 +12,8 @@ import utils as ut
 import input as inp
 import tools.checkpoint_utils as ch_utils
 import visualization as vis
+import matplotlib.pyplot as plt
 import time
-
 
 tf.app.flags.DEFINE_string('suffix', 'run', 'Suffix to use to distinguish models by purpose')
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
@@ -25,8 +25,9 @@ tf.app.flags.DEFINE_string('load_from_checkpoint', None, 'Load model state from 
 
 tf.app.flags.DEFINE_integer('max_epochs', 4, 'Train for at most this number of epochs')
 tf.app.flags.DEFINE_integer('epoch_size', 100, 'Number of batches per epoch')
+tf.app.flags.DEFINE_integer('test_size', 0, 'Number of test batches per epoch')
 tf.app.flags.DEFINE_integer('save_every', 1000, 'Save model state every INT epochs')
-tf.app.flags.DEFINE_integer('save_encodings_every', 2, 'Save encoding and visualizations every')
+tf.app.flags.DEFINE_integer('save_encodings_every', 5, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 
 tf.app.flags.DEFINE_integer('batch_size', 64, 'Batch size')
@@ -36,6 +37,8 @@ tf.app.flags.DEFINE_float('dropout', 0.0, 'Dropout probability of pre-narrow uni
 
 tf.app.flags.DEFINE_float('blur', 5.0, 'Max sigma value for Gaussian blur applied to training set')
 tf.app.flags.DEFINE_integer('blur_decrease', 50000, 'Decrease image blur every X steps')
+
+tf.app.flags.DEFINE_boolean('dev', False, 'Indicate that model is in the development mode')
 
 FLAGS = tf.app.flags.FLAGS
 slim = tf.contrib.slim
@@ -60,7 +63,7 @@ def get_variable(name):
 
 
 def get_every_dataset():
-  all_data = [x[0] for x in os.walk( '../data/tmp_grey/') if 'img' in x[0]]
+  all_data = [x[0] for x in os.walk('../data/tmp_grey/') if 'img' in x[0]]
   print(all_data)
   return all_data
 
@@ -118,7 +121,7 @@ class Model:
     meta['opt'] = str(meta['opt']).split('.')[-1][:-2]
     meta['input_path'] = FLAGS.input_path
     path = os.path.join(FLAGS.save_path, 'meta.txt')
-    json.dump(meta, open(path,'w'))
+    json.dump(meta, open(path, 'w'))
 
   def load_meta(self, save_path):
     path = os.path.join(save_path, 'meta.txt')
@@ -137,7 +140,7 @@ class Model:
 
   def _get_blur_sigma(self, step=None):
     step = step if step is not None else self._current_step.eval()
-    calculated_sigma = FLAGS.blur - int(10*step / FLAGS.blur_decrease)/10.0
+    calculated_sigma = FLAGS.blur - int(10 * step / FLAGS.blur_decrease) / 10.0
     return max(0, calculated_sigma)
 
   def _get_blurred_dataset(self):
@@ -172,6 +175,15 @@ class Model:
   _epoch_stats = None
   _stats = None
 
+  @ut.timeit
+  def restore_model(self, session):
+    self._saver = tf.train.Saver()
+    latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10])
+    ut.print_info("latest checkpoint: %s" % latest_checkpoint)
+    if FLAGS.load_state and latest_checkpoint is not None:
+      self._saver.restore(session, latest_checkpoint)
+      ut.print_info('Restored requested. Previous epoch: %d' % self.get_past_epochs(), color=31)
+
   def _register_training_start(self):
     self._epoch_stats = self._get_stats_template()
     self._stats = {
@@ -180,19 +192,19 @@ class Model:
       'permutation': None
     }
 
-  def _register_batch(self, loss):
+    if FLAGS.dev:
+      plt.ion()
+      plt.show()
+
+  # @ut.timeit
+  def _register_batch(self, loss, batch=None, encoding=None, reconstruction=None, step=None):
     self._epoch_stats['total_loss'] += loss
+    if FLAGS.dev:
+      assert batch is not None and reconstruction is not None
+      original = batch[0][:, 0]
+      vis.plot_reconstruction(original, reconstruction, interactive=True)
 
   MAX_IMAGES = 10
-
-  @ut.timeit
-  def restore_model(self, session):
-    self._saver = tf.train.Saver()
-    latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10])
-    print(latest_checkpoint)
-    if FLAGS.load_state and latest_checkpoint is not None:
-      # self._saver.restore(session, latest_checkpoint)
-      ut.print_info('Restored requested. Previous epoch: %d' % self.get_past_epochs(), color=31)
 
   # @ut.timeit
   def _register_epoch(self, epoch, total_epochs, elapsed, sess):
@@ -208,13 +220,11 @@ class Model:
         'rec': np.asarray(digest[1]),
         'blu': np.asarray(digest[2][:self.MAX_IMAGES])
       }
-      # save
+
       meta = {'suf': 'encodings', 'e': '%06d' % int(self.get_past_epochs()), 'er': int(accuracy)}
       projection_file = ut.to_file_name(meta, FLAGS.save_path)
-      st = time.time()
       np.save(projection_file, data)
-      vis.visualize_encoding_cross(data['enc'], FLAGS.save_path, meta, data['blu'], data['rec'])
-      # print('visualize+save:%f' % (time.time() - st))
+      vis.plot_encoding_crosssection(data['enc'], FLAGS.save_path, meta, data['blu'], data['rec'])
 
     self._stats['epoch_accuracy'].append(accuracy)
     self.print_epoch_info(accuracy, epoch, total_epochs, elapsed)
@@ -235,7 +245,7 @@ class Model:
     accuracy_info = '' if accuracy is None else '| accuracy %d' % int(accuracy)
     epoch_past_info = '' if epochs_past is None else '+%d' % (epochs_past - 1)
     epoch_count = 'Epochs %2d/%d%s' % (current_epoch + 1, epochs, epoch_past_info)
-    time_info = '%2dms/bt' % (elapsed / FLAGS.epoch_size*1000)
+    time_info = '%2dms/bt' % (elapsed / FLAGS.epoch_size * 1000)
 
     info_string = ' '.join([
       epoch_count,

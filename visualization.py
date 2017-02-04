@@ -11,7 +11,6 @@ import utils as ut
 import time
 import tensorflow as tf
 
-
 # Next line to silence pyflakes. This import is needed.
 Axes3D
 
@@ -20,6 +19,7 @@ Axes3D
 FLAGS = tf.app.flags.FLAGS
 COLOR_MAP = plt.cm.Spectral
 PICKER_SENSITIVITY = 5
+
 
 def scatter(plot, data, is3d, colors):
   if is3d:
@@ -40,7 +40,7 @@ def print_data_only(data, file_name, fig=None, interactive=False):
   subplot_number = 121 if fig is not None else 111
   fig.set_size_inches(fig.get_size_inches()[0] * 2, fig.get_size_inches()[1] * 1)
 
-  colors = build_radial_colors(len(data))
+  colors = _build_radial_colors(len(data))
   if data.shape[1] > 2:
     subplot = plt.subplot(subplot_number, projection='3d')
     subplot.scatter(data[:, 0], data[:, 1], data[:, 2], c=colors,
@@ -65,6 +65,7 @@ def create_gif_from_folder(folder):
   # subplot.scatter(data[0], data[1], data[2], c=colors, cmap=color_map)
   # save_fig(file_name)
   pass
+
 
 STD_THRESHOLD = 0.01
 
@@ -113,9 +114,9 @@ def visualize_encoding(encodings, folder=None, meta={}, original=None, reconstru
     fig = plt.figure()
 
     # print('reco max:', np.max(reconstruction))
-    column_picture, height = stitch_images(original, reconstruction)
+    column_picture, height = _stitch_images(original, reconstruction)
     subplot, proportion = (122, 1) if encodings.shape[1] <= 3 else (155, 3)
-    picture = reshape_images(column_picture, height, proportion=proportion)
+    picture = _reshape_column_image(column_picture, height, proportion=proportion)
     if picture.shape[-1] == 1:
       picture = picture.squeeze()
     plt.subplot(subplot).imshow(picture)
@@ -125,15 +126,8 @@ def visualize_encoding(encodings, folder=None, meta={}, original=None, reconstru
     visualize_encodings(encodings, file_name=file_path)
 
 
-# cross section start
-
-
-@ut.images_to_uint8
 # @ut.timeit
-def visualize_encoding_cross(encodings, folder=None, meta={}, original=None, reconstruction=None, interactive=False):
-  if np.max(original) < 10:
-    print('should not happen')
-    original = (original * 255).astype(np.uint8)
+def plot_encoding_crosssection(encodings, folder=None, meta={}, original=None, reconstruction=None, interactive=False):
   file_path = None
 
   if folder:
@@ -141,16 +135,11 @@ def visualize_encoding_cross(encodings, folder=None, meta={}, original=None, rec
     file_path = ut.to_file_name(meta, folder, 'jpg')
   encodings = manual_pca(encodings)
 
-  # print('shapes', reconstruction.shape, original.shape)
   fig = None
   if original is not None:
     assert len(original) == len(reconstruction)
     subplot, proportion = visualize_cross_section_with_reco(encodings, fig=fig)
-    column_picture, height = stitch_images(original, reconstruction)
-    picture = reshape_images(column_picture, height, proportion=proportion)
-    if picture.shape[-1] == 1:
-      picture = picture.squeeze()
-    # print(picture.shape)
+    picture = stitch_side_by_side(original, reconstruction, proportion)
     subplot.imshow(picture)
   else:
     visualize_cross_section(encodings, fig=fig)
@@ -160,12 +149,100 @@ def visualize_encoding_cross(encodings, folder=None, meta={}, original=None, rec
     plt.show()
 
 
+def plot_reconstruction(original, reconstruction, meta={'debug': 'true'}, interactive=False):
+  # if not interactive:
+  #   _get_figure()
+  picture = stitch_side_by_side(original, reconstruction)
+  plt.imshow(picture)
+  if not interactive:
+    file_path = ut.to_file_name(meta, FLAGS.save_path, 'jpg')
+    save_fig(file_path)
+  else:
+    plt.draw()
+    plt.pause(0.001)
+
+
+# Image stitching
+
+
+@ut.images_to_uint8
+def stitch_side_by_side(original, reconstruction, proportion=1):
+  """
+  Stitch 2 lists of images together for convenient display in a single
+  rectangular shape of given side proportion
+  """
+  assert np.max(original) >= 10, "some strange input to of the original pictures"
+  column_picture, height = _stitch_images(original, reconstruction)
+  picture = _reshape_column_image(column_picture, height, proportion=proportion)
+  if picture.shape[-1] == 1:
+    picture = picture.squeeze()
+  return picture
+
+
+def _stitch_images(*args):
+  """Recieves one or many arrays of pictures and stitches them alongside into a column picture"""
+  lines, height, width, channels = args[0].shape
+  min = 0  # int(args[0].mean())
+
+  stack = args[0]
+  if len(args) > 1:
+    for i in range(len(args) - 1):
+      stack = np.concatenate((stack, args[i + 1]), axis=2)
+  # stack - array of lines of pictures (arr_0[0], arr_1[0], ...)
+  # concatenate lines in one picture (height = tile_h * #lines)
+  picture_lines = stack.reshape(lines * height, stack.shape[2], channels)
+  picture_lines = np.hstack((
+    picture_lines,
+    np.ones((lines * height, 2, channels), dtype=np.uint8) * min))  # pad 2 pixels
+
+  # slice/reshape to have better image proportions
+  return picture_lines, height
+
+
+def _reshape_column_image(column_picture, height, proportion=1):
+  """
+  Take an "column" image of independent horizontal segments of 'height'
+  and reshape it to fit into given proportion
+
+  |img1|
+  |img2|    |img1 img4|
+  |img3| => |img2 img5|
+  |img4|    |img3     |
+  |img5|
+
+  """
+  lines = int(column_picture.shape[0] / height)
+  width = column_picture.shape[1]
+
+  column_size = int(np.ceil(np.sqrt(lines * proportion / height * width)))
+  count = int(column_picture.shape[0] / height)
+  _, _, channels = column_picture.shape
+
+  picture = column_picture[0:column_size * height, :, :]
+
+  for i in range(int(lines / column_size)):
+    start, stop = column_size * height * (i + 1), column_size * height * (i + 2)
+    if start >= len(column_picture):
+      break
+    if stop < len(column_picture):
+      picture = np.hstack((picture, column_picture[start:stop]))
+    else:
+      last_column = np.vstack((
+        column_picture[start:],
+        np.ones((stop - len(column_picture), column_picture.shape[1], column_picture.shape[2]),
+                dtype=np.uint8)))
+      picture = np.hstack((picture, last_column))
+
+  return picture
+
+
 def _get_figure(fig=None):
   if fig is not None:
     return fig
   fig = plt.figure()
   fig.set_size_inches(fig.get_size_inches()[0] * 2, fig.get_size_inches()[1] * 2)
   return fig
+
 
 import matplotlib.ticker as ticker
 
@@ -176,7 +253,7 @@ def _plot_single_cross_section(data, select, subplot):
   subplot.plot(data[:, 0], data[:, 1], color='black', lw=1, alpha=0.4)
   subplot.plot(data[[-1, 0], 0], data[[-1, 0], 1], lw=1, alpha=0.8, color='red')
   subplot.scatter(data[:, 0], data[:, 1], s=4, alpha=1.0, lw=0.5,
-                  c=build_radial_colors(len(data)),
+                  c=_build_radial_colors(len(data)),
                   marker=".",
                   cmap=plt.cm.Spectral)
   # data = np.vstack((data, np.asarray([data[0, :]])))
@@ -192,24 +269,20 @@ def _plot_single_cross_section(data, select, subplot):
   subplot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
 
 
+@ut.deprecated
 def visualize_cross_section(embeddings, fig=None):
   fig = _get_figure(fig)
   features = embeddings.shape[-1]
   size = features - 1
   for i in range(features):
-    for j in range(i+1, features):
-      pos = i*size + j
-      # print('i, j', i, j, 's, p', size, pos)
-
-      # # x, y, n = i, j, y*features+x+1
-      # print(size, size, pos)
+    for j in range(i + 1, features):
+      pos = i * size + j
       subplot = plt.subplot(size, size, pos)
       _plot_single_cross_section(embeddings, [i, j], subplot)
 
   if features >= 3:
-    # embeddings = embeddings[:1000]
-    pos = (size+1)*size - size + 1
-    subplot = plt.subplot(size+1, size, pos)
+    pos = (size + 1) * size - size + 1
+    subplot = plt.subplot(size + 1, size, pos)
     _plot_single_cross_section(embeddings, [0, 1], subplot)
   return size
 
@@ -219,18 +292,14 @@ def visualize_cross_section_with_reco(embeddings, fig=None):
   features = embeddings.shape[-1]
   size = features - 1
   for i in range(features):
-    for j in range(i+1, features):
-      pos = i*(size+1) + j
-
-      # # x, y, n = i, j, y*features+x+1
-      # print(size, size+1, pos)
-      subplot = plt.subplot(size, size+1, pos)
+    for j in range(i + 1, features):
+      pos = i * (size + 1) + j
+      subplot = plt.subplot(size, size + 1, pos)
       _plot_single_cross_section(embeddings, [i, j], subplot)
-  reco_subplot = plt.subplot(1, size+1, size+1)
+  reco_subplot = plt.subplot(1, size + 1, size + 1)
 
   if features >= 3:
-    embeddings = embeddings[:1540]
-    pos = size*size - size + 1
+    pos = size * size - size + 1
     subplot = plt.subplot(size, size, pos)
     _plot_single_cross_section(embeddings, [0, 1], subplot)
   return reco_subplot, size
@@ -241,9 +310,6 @@ def visualize_cross_section_with_reco(embeddings, fig=None):
 
 def visualize_encodings(encodings, file_name=None,
                         grid=None, skip_every=999, fast=False, fig=None, interactive=False):
-
-  # encodings = encodings[0:360] if len(encodings) < 1500 else encodings[0:720]
-
   encodings = manual_pca(encodings)
   if encodings.shape[1] <= 3:
     return print_data_only(encodings, file_name, fig=fig, interactive=interactive)
@@ -258,50 +324,41 @@ def visualize_encodings(encodings, file_name=None,
   project_ops.append(("LLE ltsa       N:%d" % n, mn.LocallyLinearEmbedding(10, n, method='ltsa')))
   project_ops.append(("LLE modified   N:%d" % n, mn.LocallyLinearEmbedding(10, n, method='modified')))
   project_ops.append(('MDS euclidean  N:%d' % n, mn.MDS(n, max_iter=300, n_init=1, dissimilarity='precomputed')))
-  project_ops.append(("TSNE 30/2000   N:%d" % n, TSNE(perplexity=30, n_components=n, init='pca',n_iter=2000)))
+  project_ops.append(("TSNE 30/2000   N:%d" % n, TSNE(perplexity=30, n_components=n, init='pca', n_iter=2000)))
   n = 3
   project_ops.append(("LLE ltsa       N:%d" % n, mn.LocallyLinearEmbedding(10, n, method='ltsa')))
   project_ops.append(("LLE modified   N:%d" % n, mn.LocallyLinearEmbedding(10, n, method='modified')))
   project_ops.append(('MDS euclidean  N:%d' % n, mn.MDS(n, max_iter=300, n_init=1, dissimilarity='precomputed')))
   project_ops.append(('MDS cosine     N:%d' % n, mn.MDS(n, max_iter=300, n_init=1, dissimilarity='precomputed')))
 
-
-  # print(
-  #   np.min(hessian_euc),
-  #   np.min(hessian_cos),
-  #   hessian_euc.size - np.count_nonzero(hessian_euc))
-
   plot_places = []
   for i in range(12):
-    u, v = int(i/(skip_every-1)), i % (skip_every - 1)
+    u, v = int(i / (skip_every - 1)), i % (skip_every - 1)
     j = v + u * skip_every + 1
     plot_places.append(j)
 
   fig = fig if fig is not None else plt.figure()
-  fig.set_size_inches(fig.get_size_inches()[0] * grid[0] /1.,
-                      fig.get_size_inches()[1] * grid[1]/2.0)
+  fig.set_size_inches(fig.get_size_inches()[0] * grid[0] / 1.,
+                      fig.get_size_inches()[1] * grid[1] / 2.0)
 
   for i, (name, manifold) in enumerate(project_ops):
     is3d = 'N:3' in name
-    # if (fast or 'grid' in FLAGS.suffix) and 'MDS' in name:
-    #   continue
 
     try:
-      if is3d: subplot = plt.subplot(grid[0], grid[1], plot_places[i], projection='3d')
-      else: subplot = plt.subplot(grid[0], grid[1], plot_places[i])
+      if is3d:
+        subplot = plt.subplot(grid[0], grid[1], plot_places[i], projection='3d')
+      else:
+        subplot = plt.subplot(grid[0], grid[1], plot_places[i])
 
       data_source = encodings if not _needs_hessian(manifold) else \
         (hessian_cos if 'cosine' in name else hessian_euc)
       projections = manifold.fit_transform(data_source)
-      scatter(subplot, projections, is3d, build_radial_colors(len(data_source)))
+      scatter(subplot, projections, is3d, _build_radial_colors(len(data_source)))
       subplot.set_title(name)
     except:
       print(name, "Unexpected error: ", sys.exc_info()[0], sys.exc_info()[1] if len(sys.exc_info()) > 1 else '')
 
-
   visualize_data_same(encodings, grid=grid, places=plot_places[-4:])
-  # visualize_data_same(encodings, grid=grid, places=np.arange(13, 17), dims_as_colors=True)
-  # fig.tight_layout()
   if not interactive:
     save_fig(file_name, fig)
   ut.print_time('visualization finished')
@@ -314,7 +371,7 @@ def save_fig(file_name, fig=None):
     plt.savefig(file_name, dpi=300, facecolor='w', edgecolor='w',
                 transparent=False, bbox_inches='tight', pad_inches=0.1,
                 frameon=None)
-    plt.close('all')
+    # plt.close('all')
 
 
 def _random_split(sequence, length, original):
@@ -324,23 +381,24 @@ def _random_split(sequence, length, original):
   return sequence[:length], sequence[length:]
 
 
+@ut.deprecated
 def visualize_data_same(data, grid, places):
   assert len(places) == 4
 
   all_dimensions = np.arange(0, data.shape[1]).astype(np.int8)
   first_proj, left = _random_split(None, 2, all_dimensions)
   first_color_indexes, _ = _random_split(left, 3, all_dimensions)
-  first_color = data_to_colors(data, first_color_indexes - 2)
+  first_color = _data_to_colors(data, first_color_indexes - 2)
 
   second_proj, left = _random_split(left, 2, all_dimensions)
-  second_color = build_radial_colors(len(data))
+  second_color = _build_radial_colors(len(data))
 
   third_proj, left = _random_split(left, 3, all_dimensions)
   third_color_indexes, _ = _random_split(left, 3, all_dimensions)
-  third_color = data_to_colors(data, third_color_indexes)
+  third_color = _data_to_colors(data, third_color_indexes)
 
   forth_proj = np.argsort(data.std(axis=0))[::-1][0:3]
-  forth_color = build_radial_colors(len(data))
+  forth_color = _build_radial_colors(len(data))
 
   for i, (projection, color) in enumerate([
     (first_proj, first_color),
@@ -359,17 +417,18 @@ def visualize_data_same(data, grid, places):
     subplot.set_title('Data %s %s' % (str(projection), 'sequntial color' if i % 2 == 1 else ''))
 
 
+@ut.deprecated
 def visualize_data_same_deprecated(data, grid, places, dims_as_colors=False):
   assert len(places) == 4
   dimensions = np.arange(0, np.min([6, data.shape[1]])).astype(np.int)
   assert len(dimensions) == data.shape[1] or len(dimensions) == 6
-  projections = [dimensions[x] for x in [[0, 1], [-1, -2], [0, 1, 2], [-1, -2, -3]] ]
-  colors = build_radial_colors(len(data))
+  projections = [dimensions[x] for x in [[0, 1], [-1, -2], [0, 1, 2], [-1, -2, -3]]]
+  colors = _build_radial_colors(len(data))
 
   for i, dims in enumerate(projections):
     points = np.transpose(data[:, dims])
     if dims_as_colors:
-      colors = data_to_colors(np.delete(data.copy(), dims, axis=1))
+      colors = _data_to_colors(np.delete(data.copy(), dims, axis=1))
 
     if len(dims) == 2:
       subplot = plt.subplot(grid[0], grid[1], places[i])
@@ -380,26 +439,25 @@ def visualize_data_same_deprecated(data, grid, places, dims_as_colors=False):
     subplot.set_title('Data %s' % str(dims))
 
 
-def duplicate_array(array, repeats=None, total_length=None):
+def _duplicate_array(array, repeats=None, total_length=None):
   assert repeats is not None or total_length is not None
 
   if repeats is None:
-    # print(total_length/len(array))
-    repeats = int(np.ceil(total_length/len(array)))
+    repeats = int(np.ceil(total_length / len(array)))
   res = array.copy()
   for i in range(repeats - 1):
     res = np.concatenate((res, array))
   return res if total_length is None else res[:total_length]
 
 
-def build_radial_colors(length):
+def _build_radial_colors(length):
   colors = np.arange(0, 180)
   colors = np.concatenate((colors, colors[::-1]))
-  colors = duplicate_array(colors, total_length=length)
+  colors = _duplicate_array(colors, total_length=length)
   return colors
 
 
-def data_to_colors(data, indexes=None):
+def _data_to_colors(data, indexes=None):
   color_data = data[:, indexes] if indexes is not None else data
   shape = color_data.shape
 
@@ -415,11 +473,10 @@ def data_to_colors(data, indexes=None):
   color_data = color_data.astype(np.int32)
   assert np.mean(color_data) <= 256
   color_data[color_data > 255] = 255
-  color_data = color_data * np.asarray([256 ** 2, 256, 1])
+  color_data *= np.asarray([256 ** 2, 256, 1])
 
   color_data = np.sum(color_data, axis=1)
   color_data = ["#%06x" % c for c in color_data]
-  # print('color example', color_data[0])
   return color_data
 
 
@@ -437,18 +494,6 @@ def visualize_available_data(root='./', reembed=True, with_mds=False):
     png_name = file.replace('.txt', '_pca.png')
 
     visualize_encodings(data, file_name=png_name)
-    # folder_info = file.split('/')[-2]
-    # layer_info = folder_info.split('_h')[1].split('_')[0]
-    # layer_info = '_h|' + layer_info if len(layer_info) >= 2 else ''
-    # lrate_info = folder_info.split('_lr|')[1].split('_')[0]
-    # epoch_info = folder_info.split('_e|')[1].split('_')[0]
-    # png_name = layer_info + '_l|' + lrate_info + '_' + epoch_info + '_' + file[0:-4] + '.png'
-    # png_path = os.path.join('./visualizations', png_name)
-    #
-    # if float(lrate_info) == 0.0004 or float(lrate_info) == 0.0001:
-    #   visualize_encodings(data, file_name=png_path)
-    #   # visualize_data(data, file_name=png_path[0:-4] + '_data.png')
-    # print('%3d/%3d -> %s' % (i, 151, png_path))
 
 
 def _list_embedding_files(root, reembed=False):
@@ -466,110 +511,7 @@ def _list_embedding_files(root, reembed=False):
   return ecndoding_files
 
 
-def rerun_embeddings():
-  for root, dirs, files in os.walk("./"):
-    path = root.split('/')
-    if './tmp/' in root and len(path) == 3:
-      for file in files:
-        if '.txt' in file:
-          layer_info = root.split('_h')[1].split('_')[0]
-          lrate_info = root.split('_lr|')[1].split('_')[0]
-
-          learning_rate = float(lrate_info)
-          if len(layer_info) < 2:
-            # print('failed to reconstruct layers', layer_info, file)
-            continue
-          if learning_rate == 0:
-            # print('failed to reconstruct learning rate', file)
-            continue
-          layer_sizes = list(map(int, layer_info.split('|')[1:]))
-          print('emb rerun', learning_rate, layer_sizes)
-          #
-
-
-def print_side_by_side(*args):
-  lines, height, width, channels = args[0].shape
-  min = 0   #int(args[0].mean())
-  print(min)
-  print('psbs', lines, height)
-
-  stack = args[0]
-  if len(args) > 1:
-    for i in range(len(args) - 1):
-      stack = np.concatenate((stack, args[i+1]), axis=2)
-  # stack - array of lines of pictures (arr_0[0], arr_1[0], ...)
-  # concatenate lines in one picture (height = tile_h * #lines)
-  picture_lines = stack.reshape(lines*height, stack.shape[2], channels)
-  picture_lines = np.hstack((
-    picture_lines,
-    np.ones((lines*height, 2, channels), dtype=np.uint8)*min)) # pad 2 pixels
-
-
-
-def stitch_images(*args):
-  """Recieves one or many arrays of pictures and stitches them into one picture"""
-  lines, height, width, channels = args[0].shape
-  min = 0   #int(args[0].mean())
-
-  stack = args[0]
-  if len(args) > 1:
-    for i in range(len(args) - 1):
-      stack = np.concatenate((stack, args[i+1]), axis=2)
-  # stack - array of lines of pictures (arr_0[0], arr_1[0], ...)
-  # concatenate lines in one picture (height = tile_h * #lines)
-  picture_lines = stack.reshape(lines*height, stack.shape[2], channels)
-  picture_lines = np.hstack((
-    picture_lines,
-    np.ones((lines*height, 2, channels), dtype=np.uint8)*min)) # pad 2 pixels
-
-  # slice/reshape to have better image proportions
-  return picture_lines, height
-
-
-def reshape_images(column_picture, height, proportion=1):
-  """
-  proportion: vertical_size / horizontal size
-  """
-  lines = int(column_picture.shape[0] / height)
-  width = column_picture.shape[1]
-
-  column_size = int(np.ceil(np.sqrt(lines*proportion/height*width)))
-  count = int(column_picture.shape[0]/height)
-  _, _, channels = column_picture.shape
-
-  picture = column_picture[0:column_size*height, :, :]
-
-  for i in range(int(lines/column_size)):
-    start, stop = column_size*height * (i+1), column_size*height * (i+2)
-    if start >= len(column_picture):
-      break
-    if stop < len(column_picture):
-      picture = np.hstack((picture, column_picture[start:stop]))
-    else:
-      last_column = np.vstack((
-        column_picture[start:],
-        np.ones((stop-len(column_picture), column_picture.shape[1], column_picture.shape[2]),
-                dtype=np.uint8)))
-      picture = np.hstack((picture, last_column))
-
-  return picture
-
-
 if __name__ == '__main__':
-  # visualize_available_data(root='../../VD_backup/All vizdoom data/', reembed=True, with_mds=True)
-  # # print_data_only(np.random.rand(10, 3), None)
-  # exit(0)
-  # # visualize_available_data()
-  # # rerun_embeddings()
-  # dec = 123654
-  # hex = "%06x" % dec
-  # data = np.random.rand(100, 8)
-  # data += np.min(data)
-  # data /= np.max(data)
-  # print(np.min(data), np.max(data))
-  # visualize_data_same(data, (2, 2), [1, 2, 3, 4])
-  # plt.show()
-
   path = '../../encodings__e|500__z_ac|96.5751.txt'
   x = np.loadtxt(path)
   # x = np.random.rand(100, 5)

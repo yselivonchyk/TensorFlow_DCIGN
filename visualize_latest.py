@@ -18,7 +18,7 @@ FLAGS = tf.app.flags.FLAGS
 def print_data(data, fig, subplot, is_3d=True):
   colors = np.arange(0, 180)
   colors = np.concatenate((colors, colors[::-1]))
-  colors = vi.duplicate_array(colors, total_length=len(data))
+  colors = vi._duplicate_array(colors, total_length=len(data))
 
   if is_3d:
     subplot = fig.add_subplot(subplot, projection='3d')
@@ -66,8 +66,8 @@ class EncodingVisualizer:
     print(any([x for x in ind if x < 20]))
     orig = self.original_data[ind]
     reco = self.reconstructions[ind]
-    column_picture, height = vi.stitch_images(orig, reco)
-    picture = vi.reshape_images(column_picture, height, proportion=3)
+    column_picture, height = vi._stitch_images(orig, reco)
+    picture = vi._reshape_column_image(column_picture, height, proportion=3)
 
     title = ''
     for i in range(len(ind)):
