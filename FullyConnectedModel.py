@@ -107,7 +107,7 @@ class FullyConnectedModel(Model.Model):
     self._reco_loss = tf.nn.l2_loss(self._decode - slim.flatten(self._reconstruction), name='reco_loss')
     self._decode = tf.reshape(self._decode, self._batch_shape, name='reshape')
     # Optimizer
-    self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate / 10000)
+    self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate)
     self._train = self._optimizer.minimize(self._reco_loss)
 
   # DATA
@@ -187,12 +187,12 @@ class FullyConnectedModel(Model.Model):
     encoded, reconstructed = None, None
     blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
     for batch in self._batch_generator(blurred, shuffle=None):
-      encoding, reconstruction = sess.run(
-        [self._encode, self._decode],
-        feed_dict={self._input: batch[0]})
+      encoding = self._encode.eval(feed_dict={self._input: batch[0]})
       encoded = self._concatenate(encoded, encoding)
-      reconstructed = self._concatenate(reconstructed, reconstruction, take=take)
-    return encoded, reconstructed, blurred
+
+    for batch in self._batch_generator(blurred):
+      reconstruction = self._decode.eval(feed_dict={self._input: batch[0]})
+    return encoded, reconstruction[:take], batch[0][:take]
 
   @staticmethod
   def _concatenate(x, y, take=None):

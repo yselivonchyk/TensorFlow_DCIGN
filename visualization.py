@@ -132,7 +132,7 @@ def plot_encoding_crosssection(encodings, folder=None, meta={}, original=None, r
     file_path = ut.to_file_name(meta, folder, 'jpg')
   encodings = manual_pca(encodings)
 
-  fig = _get_figure() if not FLAGS.dev else None
+  fig = _get_figure()
   if original is not None:
     assert len(original) == len(reconstruction),  (len(original), len(reconstruction))
     subplot, proportion = visualize_cross_section_with_reco(encodings)
@@ -211,7 +211,6 @@ def _reshape_column_image(column_picture, height, proportion=1):
   width = column_picture.shape[1]
 
   column_size = int(np.ceil(np.sqrt(lines * proportion * (width / height))))
-  print(proportion, column_size)
   count = int(column_picture.shape[0] / height)
   _, _, channels = column_picture.shape
 
@@ -274,6 +273,9 @@ def _plot_single_cross_section_3d(data, select, subplot):
                   c=_build_radial_colors(len(data)),
                   marker=".",
                   cmap=plt.cm.Spectral)
+  data = data[0::10]
+  # subplot.plot(data[:, 0], data[:, 1], data[:, 2], color='black', lw=2, alpha=0.8)
+
   # data = np.vstack((data, np.asarray([data[0, :]])))
   # subplot.plot(data[:, 0], data[:, 1], alpha=0.4)
 
@@ -316,11 +318,11 @@ def visualize_cross_section_with_reco(embeddings):
       _plot_single_cross_section(embeddings, [i, j], subplot)
   reco_subplot = plt.subplot(1, size + 1, size + 1)
 
-  if size > 2:
+  if size >= 2:
     single_size = size if size < 4 else int(size/2)
     pos = single_size * (single_size + 1) - (single_size + 1) + 1
     subplot = plt.subplot(single_size, single_size+1, pos, projection='3d')
-    _plot_single_cross_section_3d(embeddings, [1, 2, 3], subplot)
+    _plot_single_cross_section_3d(embeddings, [0, 1, 2], subplot)
   return reco_subplot, size
 
 
