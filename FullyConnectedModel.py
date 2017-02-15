@@ -11,7 +11,6 @@ import Model
 import time
 import tensorflow.contrib.slim as slim
 
-
 tf.app.flags.DEFINE_integer('stride', 1, 'Data is permuted in series of INT consecutive inputs')
 FLAGS = tf.app.flags.FLAGS
 
@@ -89,29 +88,26 @@ class FullyConnectedModel(Model.Model):
     tf.reset_default_graph()
     self._current_step = tf.Variable(0, trainable=False, name='global_step')
     self._step = tf.assign(self._current_step, self._current_step + 1)
-    # Encoder
     self._input = tf.placeholder(tf.float32, self._batch_shape, name='input')
+    self._reconstruction = tf.placeholder(tf.float32, self._batch_shape, name='reco')
+
     self._encode = slim.flatten(self._input)
-    for i in range(self.layer_narrow + 1):
-      size, desc = self.layers[i], 'enc_hidden_%d' % i
-      self._encode = slim.fully_connected(self._encode, size, scope=desc)
-    # Decoder
-    narrow, layers = self.layers[self.layer_narrow], self.layers[self.layer_narrow+1:]
+    for i, size in enumerate(self.layers[:self.layer_narrow + 1]):
+      desc = 'enc_hidden_%d' % i
+      self._encode = slim.fully_connected(self._encode, size, scope=desc, activation_fn=tf.nn.sigmoid)
 
-    self._encoding = tf.placeholder(tf.float32, (FLAGS.batch_size, narrow), name='encoding')
-    self._reconstruction = tf.placeholder(tf.float32, self._batch_shape)
-
-    for i, size in enumerate(layers):
-      start = self._decode if i != 0 else self._encode
-      self._decode = slim.fully_connected(start, size, scope=desc, activation_fn=tf.nn.sigmoid, name=desc)
-
+    self._decode = self._encode
+    for i, size in enumerate(self.layers[self.layer_narrow + 1:]):
+      desc = 'dec_hidden_%d' % i
+      self._decode = slim.fully_connected(self._decode, size, scope=desc, activation_fn=tf.nn.sigmoid)
     self._decode = slim.dropout(self._decode, 1.0 - FLAGS.dropout, is_training=True, scope='dropout3')
     ut.print_info('Dropout applied to the last layer of the network: %f' % (1. - FLAGS.dropout))
-    self._decode = slim.fully_connected(self._decode, int(np.prod(self._image_shape)), scope='output')
-    self._reco_loss = self._build_reco_loss(self._reconstruction)
+    self._decode = slim.fully_connected(self._decode, int(np.prod(self._image_shape)), scope='output', activation_fn=tf.nn.sigmoid)
+
+    self._reco_loss = tf.nn.l2_loss(self._decode - slim.flatten(self._reconstruction), name='reco_loss')
     self._decode = tf.reshape(self._decode, self._batch_shape, name='reshape')
     # Optimizer
-    self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate/10000)
+    self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate / 10000)
     self._train = self._optimizer.minimize(self._reco_loss)
 
   # DATA
@@ -119,7 +115,7 @@ class FullyConnectedModel(Model.Model):
   def fetch_datasets(self, activation_func_bounds):
     self.dataset = inp.read_ds_zip(FLAGS.input_path)
     if DEV:
-      self.dataset = self.dataset[:FLAGS.batch_size*5]
+      self.dataset = self.dataset[:FLAGS.batch_size * 5]
       print('Dataset cropped')
 
     shape = list(self.dataset.shape)
@@ -133,11 +129,11 @@ class FullyConnectedModel(Model.Model):
 
     self.test_set = inp.read_ds_zip(FLAGS.test_path)
     if DEV:
-      self.test_set = self.test_set[:FLAGS.batch_size*5]
+      self.test_set = self.test_set[:FLAGS.batch_size * 5]
       print()
-    test_max = int(FLAGS.test_max) if FLAGS.test_max >= 1 else int(FLAGS.test_max*len(self.test_set))
+    test_max = int(FLAGS.test_max) if FLAGS.test_max >= 1 else int(FLAGS.test_max * len(self.test_set))
     self.test_set = self.test_set[0:test_max]
-    self.test_set = inp.rescale_ds(self.test_set, self._activation.min, self._activation.max)
+    self.test_set = inp.rescale_ds(self.test_set, activation_func_bounds.min, activation_func_bounds.max)
 
   def _batch_generator(self, dataset=None, shuffle=True):
     dataset = dataset if dataset is not None else self._get_blurred_dataset()
@@ -145,7 +141,7 @@ class FullyConnectedModel(Model.Model):
     permutation = permutation if not shuffle else np.random.permutation(permutation)
     total_batches = int(len(dataset) / FLAGS.batch_size)
     for i in range(total_batches):
-      batch_indexes = permutation[i*FLAGS.batch_size:(i+1)*FLAGS.batch_size]
+      batch_indexes = permutation[i * FLAGS.batch_size:(i + 1) * FLAGS.batch_size]
       batch = dataset[batch_indexes]
       yield batch, batch
 
@@ -167,10 +163,10 @@ class FullyConnectedModel(Model.Model):
 
     self.fetch_datasets(self._activation)
     self.build_model()
-    self._register_training_start()
 
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
+      self._register_training_start(sess)
       self.restore_model(sess)
 
       # MAIN LOOP
@@ -182,7 +178,7 @@ class FullyConnectedModel(Model.Model):
             feed_dict={self._input: batch[0], self._reconstruction: batch[0]})
 
           self._register_batch(loss)
-        self._register_epoch(current_epoch, epochs_to_train, time.time()-start, sess)
+        self._register_epoch(current_epoch, epochs_to_train, time.time() - start, sess)
       self._writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
       meta = self._register_training()
     return meta, self._stats['epoch_accuracy']

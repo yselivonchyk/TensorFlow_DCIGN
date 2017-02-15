@@ -67,10 +67,7 @@ def create_gif_from_folder(folder):
   pass
 
 
-STD_THRESHOLD = 0.01
-
-
-def manual_pca(data):
+def manual_pca(data, std_threshold=0.01, num_threshold=3):
   """remove meaningless dimensions"""
   std = data[0:300].std(axis=0)
 
@@ -79,11 +76,11 @@ def manual_pca(data):
   std = std[order]
   # filter components by STD but take at least 3
 
-  meaningless = [order[i] for i, x in enumerate(std) if x <= STD_THRESHOLD]
+  meaningless = [order[i] for i, x in enumerate(std) if x <= std_threshold]
   if any(meaningless) and data.shape[1] > 3:
     ut.print_info('meaningless dimensions on visualization: %s' % str(meaningless))
 
-  order = [order[i] for i, x in enumerate(std) if x > STD_THRESHOLD or i < 3]
+  order = [order[i] for i, x in enumerate(std) if x > std_threshold or i < num_threshold]
   order.sort()
   return data[:, order]
 
@@ -135,18 +132,16 @@ def plot_encoding_crosssection(encodings, folder=None, meta={}, original=None, r
     file_path = ut.to_file_name(meta, folder, 'jpg')
   encodings = manual_pca(encodings)
 
-  fig = None
+  fig = _get_figure() if not FLAGS.dev else None
   if original is not None:
-    assert len(original) == len(reconstruction)
-    subplot, proportion = visualize_cross_section_with_reco(encodings, fig=fig)
+    assert len(original) == len(reconstruction),  (len(original), len(reconstruction))
+    subplot, proportion = visualize_cross_section_with_reco(encodings)
     picture = stitch_side_by_side(original, reconstruction, proportion)
     subplot.imshow(picture)
   else:
-    visualize_cross_section(encodings, fig=fig)
+    visualize_cross_section(encodings)
   if not interactive:
     save_fig(file_path, fig)
-  else:
-    plt.show()
 
 
 def plot_reconstruction(original, reconstruction, meta={'debug': 'true'}, interactive=False):
@@ -215,7 +210,8 @@ def _reshape_column_image(column_picture, height, proportion=1):
   lines = int(column_picture.shape[0] / height)
   width = column_picture.shape[1]
 
-  column_size = int(np.ceil(np.sqrt(lines * proportion / height * width)))
+  column_size = int(np.ceil(np.sqrt(lines * proportion * (width / height))))
+  print(proportion, column_size)
   count = int(column_picture.shape[0] / height)
   _, _, channels = column_picture.shape
 
@@ -262,17 +258,39 @@ def _plot_single_cross_section(data, select, subplot):
 
   subplot.set_xlabel('feature %d' % select[0])
   subplot.set_ylabel('feature %d' % select[1])
-  subplot.set_xlim([-0.1, 1.1])
-  subplot.set_ylim([-0.1, 1.1])
+  subplot.set_xlim([-0.05, 1.05])
+  subplot.set_ylim([-0.05, 1.05])
   subplot.xaxis.set_ticks([0, 1])
   subplot.xaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
   subplot.yaxis.set_ticks([0, 1])
   subplot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
 
+def _plot_single_cross_section_3d(data, select, subplot):
+  data = data[:, select]
+  # subplot.scatter(data[:, 0], data[:, 1], s=20, lw=0, edgecolors='none', alpha=1.0,
+  subplot.plot(data[:, 0], data[:, 1], data[:, 2], color='black', lw=1, alpha=0.4)
+  subplot.plot(data[[-1, 0], 0], data[[-1, 0], 1], data[[-1, 0], 2], lw=1, alpha=0.8, color='red')
+  subplot.scatter(data[:, 0], data[:, 1], data[:, 2], s=4, alpha=1.0, lw=0.5,
+                  c=_build_radial_colors(len(data)),
+                  marker=".",
+                  cmap=plt.cm.Spectral)
+  # data = np.vstack((data, np.asarray([data[0, :]])))
+  # subplot.plot(data[:, 0], data[:, 1], alpha=0.4)
+
+  subplot.set_xlabel('feature %d' % select[0])
+  subplot.set_ylabel('feature %d' % select[1])
+  subplot.set_xlim([-0.01, 1.01])
+  subplot.set_ylim([-0.01, 1.01])
+  subplot.set_zlim([-0.01, 1.01])
+  subplot.xaxis.set_ticks([0, 1])
+  subplot.yaxis.set_ticks([0, 1])
+  subplot.zaxis.set_ticks([0, 1])
+  subplot.xaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
+  subplot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
+
 
 @ut.deprecated
-def visualize_cross_section(embeddings, fig=None):
-  fig = _get_figure(fig)
+def visualize_cross_section(embeddings):
   features = embeddings.shape[-1]
   size = features - 1
   for i in range(features):
@@ -288,8 +306,7 @@ def visualize_cross_section(embeddings, fig=None):
   return size
 
 
-def visualize_cross_section_with_reco(embeddings, fig=None):
-  fig = _get_figure(fig)
+def visualize_cross_section_with_reco(embeddings):
   features = embeddings.shape[-1]
   size = features - 1
   for i in range(features):
@@ -299,10 +316,11 @@ def visualize_cross_section_with_reco(embeddings, fig=None):
       _plot_single_cross_section(embeddings, [i, j], subplot)
   reco_subplot = plt.subplot(1, size + 1, size + 1)
 
-  if features >= 3:
-    pos = size * size - size + 1
-    subplot = plt.subplot(size, size, pos)
-    _plot_single_cross_section(embeddings, [0, 1], subplot)
+  if size > 2:
+    single_size = size if size < 4 else int(size/2)
+    pos = single_size * (single_size + 1) - (single_size + 1) + 1
+    subplot = plt.subplot(single_size, single_size+1, pos, projection='3d')
+    _plot_single_cross_section_3d(embeddings, [1, 2, 3], subplot)
   return reco_subplot, size
 
 
@@ -518,6 +536,6 @@ if __name__ == '__main__':
   # x = np.random.rand(100, 5)
   x = manual_pca(x)
   x = x[:360]
-  visualize_cross_section_with_reco(x, None)
+  visualize_cross_section_with_reco(x)
   plt.tight_layout()
   plt.show()

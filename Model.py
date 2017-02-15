@@ -23,10 +23,10 @@ tf.app.flags.DEFINE_string('save_path', './tmp/checkpoint', 'Where to save the m
 tf.app.flags.DEFINE_string('logdir', '', 'where to save logs.')
 tf.app.flags.DEFINE_string('load_from_checkpoint', None, 'Load model state from particular checkpoint')
 
-tf.app.flags.DEFINE_integer('max_epochs', 4, 'Train for at most this number of epochs')
+tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
 tf.app.flags.DEFINE_integer('epoch_size', 100, 'Number of batches per epoch')
 tf.app.flags.DEFINE_integer('test_size', 0, 'Number of test batches per epoch')
-tf.app.flags.DEFINE_integer('save_every', 1000, 'Save model state every INT epochs')
+tf.app.flags.DEFINE_integer('save_every', 250, 'Save model state every INT epochs')
 tf.app.flags.DEFINE_integer('save_encodings_every', 5, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 
@@ -184,7 +184,9 @@ class Model:
       self._saver.restore(session, latest_checkpoint)
       ut.print_info('Restored requested. Previous epoch: %d' % self.get_past_epochs(), color=31)
 
-  def _register_training_start(self):
+  def _register_training_start(self, sess):
+    self.summary_writer = tf.summary.FileWriter('/tmp/train', sess.graph)
+
     self._epoch_stats = self._get_stats_template()
     self._stats = {
       'epoch_accuracy': [],
@@ -238,6 +240,7 @@ class Model:
     meta['acu'] = int(best_acc)
     meta['e'] = self.get_past_epochs()
     ut.print_time('Best Quality: %f for %s' % (best_acc, ut.to_file_name(meta)))
+    self.summary_writer.close()
     return meta
 
   def print_epoch_info(self, accuracy, current_epoch, epochs, elapsed):

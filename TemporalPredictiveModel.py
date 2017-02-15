@@ -1,15 +1,9 @@
 """
-Temporal encoder-decoder network inspired by DCIGN.
-Network converts 2 subsequent frames into some reach representation.
-sparse_encoding module creates low-dim representation that must be
-sufficient to reconstruct img2 given representation of img1
-
-
-  [img1] -> [prep] \ -----------------------[decoder] -> [img2*]
-                    \                     /
-                     [sparse_encoding]---/
-                    /
-  [img2] -> [prep] /
+                     (2*h2-h3)= (p1)  -> [dec] -> img1*
+  [img1] -> [enc] -> (h1)             -> [dec] -> img1*
+  [img2] -> [enc] -> (h2)             -> [dec] -> img2*
+  [img3] -> [enc] -> (h3)             -> [dec] -> img3*
+                     (2*h2-h1)= (p3)  -> [dec] -> img3*
 
 """
 from six.moves import xrange  # pylint: disable=redefined-builtin
@@ -22,9 +16,10 @@ import Model
 import time
 import tensorflow.contrib.slim as slim
 import visualization as vis
-
+import getch
 
 tf.app.flags.DEFINE_integer('stride', 1, 'Data is permuted in series of INT consecutive inputs')
+tf.app.flags.DEFINE_float('alpha', 0.1, 'Determines the weight of predicted_reconstruction error')
 FLAGS = tf.app.flags.FLAGS
 
 
@@ -38,10 +33,12 @@ def _get_stats_template():
   }
 
 
-class TemporalModel(Model.Model):
-  model_id = 'residual'
+class TemporalPredictiveModel(Model.Model):
+  model_id = 'predictiv'
 
-  layers = [32, 32]
+  layers = [40, 6, 40]
+  layer_narrow = 1
+
   dataset = None
   permutation = None
 
@@ -76,14 +73,18 @@ class TemporalModel(Model.Model):
     return self.layers
 
   def get_image_shape(self):
-    return self._batch_shape[1:]
+    return self._batch_shape[2:]
+
+  def get_decoding_shape(self):
+    return self._batch_shape[:1] + self._batch_shape[2:]
 
   def get_meta(self, meta=None):
-    meta = super(TemporalModel, self).get_meta(meta=meta)
+    meta = super(TemporalPredictiveModel, self).get_meta(meta=meta)
+    meta['al'] = FLAGS.alpha
     return meta
 
   def load_meta(self, save_path):
-    meta = super(TemporalModel, self).load_meta(save_path)
+    meta = super(TemporalPredictiveModel, self).load_meta(save_path)
     self._weight_init = meta['init']
     self._optimizer = tf.train.AdadeltaOptimizer \
       if 'Adam' in meta['opt'] \
@@ -93,11 +94,7 @@ class TemporalModel(Model.Model):
     ut.configure_folders(FLAGS, self.get_meta())
     return meta
 
-  def build_model(self):
-    """Construct encoder network: placeholders, operations, optimizer"""
-    pass
-
-  def build_shift_model(self):
+  def build_predictive_model(self):
     """
     Emulate image reconstruction from preprocessed representation
 
@@ -105,79 +102,93 @@ class TemporalModel(Model.Model):
     """
     # Global step
     tf.reset_default_graph()
-    self._reconstruction = tf.placeholder(tf.float32, self._batch_shape)
+    # self._reconstruction = tf.placeholder(tf.float32, self._batch_shape)
 
     self._current_step = tf.Variable(0, trainable=False, name='global_step')
     self._step = tf.assign(self._current_step, self._current_step + 1)
     # Encoder
     self._input = tf.placeholder(tf.float32, self._batch_shape, name='input')
-    img1, img2 = self._input[:,0,:], self._input[:,1,:]
+    img1, img2, img3 = self._input[:, 0, :], self._input[:, 1, :], self._input[:, 2, :]
+    encodings = list(map(self._encoder, [img1, img2, img3]))
+    encodings += [2 * encodings[1] - encodings[2], 2 * encodings[1] - encodings[0]]
+    decodings = list(map(self._decoder, encodings))
 
-    net = slim.conv2d(img1, self.layers[0], [1, 1], scope='conv_stem',
-                        normalizer_fn=slim.batch_norm,
-                        normalizer_params={'scale': True})
-    for i, l in enumerate(self.layers):
-      net = self.residual_group(i, l, net)
-    net = slim.conv2d(net, 4, [1, 1], scope='conv_out', normalizer_fn=None)
-    self._encode = net
-    self._decode = net
-    print(net)
+    l1 = tf.nn.l2_loss(decodings[0] - slim.flatten(img1), name='reco1_loss')
+    l2 = tf.nn.l2_loss(decodings[1] - slim.flatten(img2), name='reco2_loss')
+    l3 = tf.nn.l2_loss(decodings[2] - slim.flatten(img3), name='reco3_loss')
+    p1 = tf.nn.l2_loss(decodings[3] - slim.flatten(img1), name='pred1_loss')
+    p3 = tf.nn.l2_loss(decodings[4] - slim.flatten(img3), name='pred3_loss')
+    loss = l1 + l2 + l3 + FLAGS.alpha * (p1 + p3)
 
-    self._reco_loss = tf.nn.l2_loss(slim.flatten(self._decode - img1), name='reco_loss')
     # Optimizer
     self._optimizer = self._optimizer_constructor(learning_rate=FLAGS.learning_rate)
-    self._train = self._optimizer.minimize(self._reco_loss)
+    self._train = self._optimizer.minimize(loss)
 
-  def residual_group(self, i, net):
-    source = net
-    depth = net.get_shape()[-1]
-    net = slim.conv2d(source, depth, [3, 3], scope='conv_%d_1' % i,
-                      normalizer_fn=slim.batch_norm,
-                      normalizer_params={'scale': True})
-    net = slim.conv2d(net, depth, [3, 3], scope='conv_%d_2' % i,
-                      normalizer_fn=slim.batch_norm,
-                      normalizer_params={'scale': True},
-                      activation_fn=None)
-    net = tf.add(net, source)
-    net = tf.nn.relu(net)
-    return net
+    self._reco_loss = l2
+    self._decode = tf.reshape(decodings[4], self.get_decoding_shape(), name='reshape')
+    self._encode = encodings[1]
+
+  _encoder_initialized = False
+
+  def _encoder(self, img):
+    encoding = slim.flatten(img)
+    for i in range(self.layer_narrow + 1):
+      size, desc = self.layers[i], 'enc_%d' % i
+      encoding = slim.fully_connected(encoding, size, activation_fn=tf.nn.sigmoid, scope=desc,
+                                      reuse=self._encoder_initialized)
+    self._encoder_initialized = True
+    return encoding
+
+  _decoder_initialized = False
+
+  def _decoder(self, enc):
+    decoding = None
+    for i, size in enumerate(self.layers[self.layer_narrow + 1:]):
+      decoding = enc if decoding is None else decoding
+      desc = 'dec_%d' % i
+      decoding = slim.fully_connected(decoding, size, scope=desc, activation_fn=tf.nn.sigmoid,
+                                      reuse=self._decoder_initialized)
+    decoding = slim.fully_connected(decoding, int(np.prod(self.get_image_shape())), scope='output',
+                                    reuse=self._decoder_initialized)
+    self._decoder_initialized = True
+    return decoding
 
   # DATA
   @ut.timeit
   def fetch_datasets(self, activation_func_bounds):
     self.dataset = inp.read_ds_zip(FLAGS.input_path)
     if FLAGS.dev:
-      self.dataset = self.dataset[:FLAGS.batch_size*5+1]
+      self.dataset = self.dataset[:FLAGS.batch_size * 5 + 1]
       print('Dataset cropped')
 
     shape = list(self.dataset.shape)
     FLAGS.epoch_size = int(shape[0] / FLAGS.batch_size)
 
-    self._batch_shape = [FLAGS.batch_size, 2] + shape[1:]
+    self._batch_shape = [FLAGS.batch_size, 3] + shape[1:]
     self.dataset = self.dataset[:int(len(self.dataset) / FLAGS.batch_size) * FLAGS.batch_size]
     self.dataset = inp.rescale_ds(self.dataset, activation_func_bounds.min, activation_func_bounds.max)
 
     self.test_set = inp.read_ds_zip(FLAGS.test_path)
     if FLAGS.dev:
-      self.test_set = self.test_set[:FLAGS.batch_size*5+1]
+      self.test_set = self.test_set[:FLAGS.batch_size * 5 + 1]
       print("DEVELOPMENT MODE")
     FLAGS.test_size = int(len(self.test_set) / FLAGS.batch_size)
 
-    test_max = int(FLAGS.test_max) if FLAGS.test_max >= 1 else int(FLAGS.test_max*len(self.test_set))
+    test_max = int(FLAGS.test_max) if FLAGS.test_max >= 1 else int(FLAGS.test_max * len(self.test_set))
     self.test_set = self.test_set[0:test_max]
     self.test_set = inp.rescale_ds(self.test_set, self._activation.min, self._activation.max)
 
   def _batch_generator(self, dataset=None, shuffle=True):
     """Returns BATCH_SIZE of couples of subsequent images"""
     dataset = dataset if dataset is not None else self._get_blurred_dataset()
-    self.permutation = np.arange(len(dataset))
+    self.permutation = np.arange(len(dataset) - 2)
     self.permutation = self.permutation if not shuffle else np.random.permutation(self.permutation)
 
     total_batches = int(len(self.permutation) / FLAGS.batch_size)
 
     for i in range(total_batches):
-      batch_indexes = self.permutation[i*FLAGS.batch_size:(i+1)*FLAGS.batch_size]
-      batch = np.stack((dataset[batch_indexes], dataset[batch_indexes+1]), axis=1)
+      batch_indexes = self.permutation[i * FLAGS.batch_size:(i + 1) * FLAGS.batch_size]
+      batch = np.stack((dataset[batch_indexes], dataset[batch_indexes + 1], dataset[batch_indexes + 2]), axis=1)
       yield batch, batch
 
   def set_layer_sizes(self, h):
@@ -186,6 +197,7 @@ class TemporalModel(Model.Model):
       h = h.replace('/', '|')
       h = list(map(int, h.split('|')))
     self.layers = h
+    self.layer_narrow = np.argmin(h)
 
   # TRAIN
 
@@ -195,7 +207,7 @@ class TemporalModel(Model.Model):
     ut.configure_folders(FLAGS, meta)
 
     self.fetch_datasets(self._activation)
-    self.build_shift_model()
+    self.build_predictive_model()
 
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
@@ -203,32 +215,34 @@ class TemporalModel(Model.Model):
       self.restore_model(sess)
 
       # MAIN LOOP
-      for current_epoch in xrange(epochs_to_train):
-        start = time.time()
-        for batch in self._batch_generator():
-          encoding, reconstruction, loss, _, step = sess.run(
-            [self._encode, self._decode, self._reco_loss, self._train, self._step],
-            feed_dict={self._input: batch[0], self._reconstruction: batch[0]})
+      try:
+        for current_epoch in xrange(epochs_to_train):
+          start = time.time()
+          for batch in self._batch_generator():
+            encoding, reconstruction, loss, _, step = sess.run(
+              [self._encode, self._decode, self._reco_loss, self._train, self._step],
+              feed_dict={self._input: batch[0]})
+            self._register_batch(loss, batch, encoding, reconstruction, step)
+            # ut.print_model_info(trainable=True)
+          self._register_epoch(current_epoch, epochs_to_train, time.time() - start, sess)
+        self._writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
+        meta = self._register_training()
+      except KeyboardInterrupt:
+        self._try_save(sess)
 
-          self._register_batch(loss, batch, encoding, reconstruction, step)
-          # ut.print_model_info(trainable=True)
-        self._register_epoch(current_epoch, epochs_to_train, time.time()-start, sess)
-      self._writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
-      meta = self._register_training()
     return meta, self._stats['epoch_accuracy']
 
   def evaluate(self, sess, take):
     encoded, reconstructed, data = None, None, None
     blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
-
-    # for batch in self._batch_generator(blurred, shuffle=False):
-    #   encoding = sess.run([self._encode], feed_dict={self._input: batch[0]})[0]
-    #   encoded = np.concatenate((encoded, encoding)) if encoded is not None else encoding
+    for batch in self._batch_generator(blurred, shuffle=False):
+      encoding = sess.run([self._encode], feed_dict={self._input: batch[0]})[0]
+      encoded = np.concatenate((encoded, encoding)) if encoded is not None else encoding
 
     for batch in self._batch_generator(blurred):
       reco = sess.run([self._decode], feed_dict={self._input: batch[0]})[0]
       break
-    return encoded, reco[:take], batch[0][:, 1, :][:take]
+    return encoded, reco[:take], batch[0][:,1,:][:take]
 
   def _register_epoch(self, epoch, total_epochs, elapsed, sess):
     if Model.is_stopping_point(epoch, total_epochs, FLAGS.save_every):
@@ -237,29 +251,38 @@ class TemporalModel(Model.Model):
     accuracy = 100000 * np.sqrt(self._epoch_stats['total_loss'] / np.prod(self._batch_shape) / FLAGS.epoch_size)
 
     if Model.is_stopping_point(epoch, total_epochs, FLAGS.save_encodings_every):
-      digest = self.evaluate(sess, take=self.MAX_IMAGES)
+      encoding, reconstruction, source = self.evaluate(sess, take=self.MAX_IMAGES)
+      print(encoding.shape, reconstruction.shape, source.shape)
       data = {
-        'rec': np.asarray(digest[1]),
-        'blu': np.asarray(digest[2][:self.MAX_IMAGES])
+        'enc': np.asarray(encoding),
+        'rec': np.asarray(reconstruction),
+        'blu': np.asarray(source)
       }
       meta = {'suf': 'encodings', 'e': '%06d' % int(self.get_past_epochs()), 'er': int(accuracy)}
-      vis.plot_reconstruction(data['blu'], data['rec'], meta)
+      projection_file = ut.to_file_name(meta, FLAGS.save_path)
+      np.save(projection_file, data)
+      vis.plot_encoding_crosssection(encoding, FLAGS.save_path, meta, source, reconstruction, interactive=FLAGS.dev)
 
     self._stats['epoch_accuracy'].append(accuracy)
     self.print_epoch_info(accuracy, epoch, total_epochs, elapsed)
     if epoch + 1 != total_epochs:
       self._epoch_stats = self._get_stats_template()
 
+  def _try_save(self, sess):
+    print('Press ENTER to save model')
+    if getch.getch() == '\n':
+      print('saving')
+      self._saver.save(sess, self.get_checkpoint_path())
+
 
 if __name__ == '__main__':
   import sys
 
-  model = TemporalModel()
+  model = TemporalPredictiveModel()
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
   print(args)
   FLAGS.blur_decrease = 1000
   FLAGS.blur = 1.0
-  FLAGS.learning_rate = FLAGS.learning_rate/30
   if len(args) <= 1:
     FLAGS.max_epochs = 50
     FLAGS.save_encodings_every = 1
