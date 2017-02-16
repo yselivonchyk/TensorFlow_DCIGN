@@ -192,6 +192,7 @@ class FullyConnectedModel(Model.Model):
 
     for batch in self._batch_generator(blurred):
       reconstruction = self._decode.eval(feed_dict={self._input: batch[0]})
+      break
     return encoded, reconstruction[:take], batch[0][:take]
 
   @staticmethod

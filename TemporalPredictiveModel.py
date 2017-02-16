@@ -34,7 +34,7 @@ def _get_stats_template():
 
 
 class TemporalPredictiveModel(Model.Model):
-  model_id = 'predictiv'
+  model_id = 'pred_conv2'
 
   layers = [40, 6, 40]
   layer_narrow = 1
@@ -109,7 +109,7 @@ class TemporalPredictiveModel(Model.Model):
     # Encoder
     self._input = tf.placeholder(tf.float32, self._batch_shape, name='input')
     img1, img2, img3 = self._input[:, 0, :], self._input[:, 1, :], self._input[:, 2, :]
-    encodings = list(map(self._encoder, [img1, img2, img3]))
+    encodings = list(map(self._encoder_conv, [img1, img2, img3]))
     encodings += [2 * encodings[1] - encodings[2], 2 * encodings[1] - encodings[0]]
     decodings = list(map(self._decoder, encodings))
 
@@ -125,7 +125,7 @@ class TemporalPredictiveModel(Model.Model):
     self._train = self._optimizer.minimize(loss)
 
     self._reco_loss = l2
-    self._decode = tf.reshape(decodings[4], self.get_decoding_shape(), name='reshape')
+    self._decode = [tf.reshape(x, self.get_decoding_shape())for x in decodings]
     self._encode = encodings[1]
 
   _encoder_initialized = False
@@ -136,6 +136,31 @@ class TemporalPredictiveModel(Model.Model):
       size, desc = self.layers[i], 'enc_%d' % i
       encoding = slim.fully_connected(encoding, size, activation_fn=tf.nn.sigmoid, scope=desc,
                                       reuse=self._encoder_initialized)
+    self._encoder_initialized = True
+    return encoding
+
+  conv_padding = 'VALID'
+
+  def _encoder_conv(self, img):
+    encoding = img
+
+    for i, size in enumerate([96, 48, 24]):
+      desc = 'conv_%d_1' % i
+      encoding = slim.conv2d(encoding, size, [3, 3], scope=desc,
+                             padding=self.conv_padding,
+                             normalizer_fn=slim.batch_norm,
+                             normalizer_params={'scale': True},
+                             reuse=self._encoder_initialized)
+      desc = 'conv_%d_2' % i
+      encoding = slim.conv2d(encoding, size, [3, 3], scope=desc,
+                             padding=self.conv_padding,
+                             normalizer_fn=slim.batch_norm,
+                             normalizer_params={'scale': True},
+                             reuse=self._encoder_initialized)
+      encoding = slim.max_pool2d(encoding, [2, 2])
+    self._encoding_shape = list(map(int, encoding.get_shape()))
+    encoding = slim.fully_connected(slim.flatten(encoding), 4, activation_fn=tf.nn.sigmoid, scope='encoding',
+                                    reuse=self._encoder_initialized)
     self._encoder_initialized = True
     return encoding
 
@@ -150,6 +175,36 @@ class TemporalPredictiveModel(Model.Model):
                                       reuse=self._decoder_initialized)
     decoding = slim.fully_connected(decoding, int(np.prod(self.get_image_shape())), scope='output',
                                     reuse=self._decoder_initialized)
+    self._decoder_initialized = True
+    return decoding
+
+  def _decoder_conv(self, enc):
+    print(self._encoding_shape)
+    size = int(np.prod(self._encoding_shape[1:]))
+    print(size, type(size))
+    decoding = slim.fully_connected(enc, size, scope='dec_flat',
+                                    reuse=self._decoder_initialized)
+    decoding = tf.reshape(decoding, self._encoding_shape)
+
+    for i, size in enumerate([48, 96, self.get_image_shape()[-1]]):
+      decoding = Model.unpool(decoding)
+      print('unpool', decoding)
+      desc = 'dec_%d_1' % i
+      decoding = slim.convolution2d_transpose(decoding, size, scope=desc,
+                                              kernel_size=[3, 3],
+                                              padding='VALID',
+                                              # normalizer_fn=slim.batch_norm,
+                                              # normalizer_params={'scale': True},
+                                              reuse=self._decoder_initialized)
+      print('dc1', decoding)
+      desc = 'dec_%d_2' % i
+      decoding = slim.convolution2d_transpose(decoding, size, scope=desc,
+                                              kernel_size=[3, 3],
+                                              padding='VALID',
+                                              # normalizer_fn=slim.batch_norm,
+                                              # normalizer_params={'scale': True},
+                                              reuse=self._decoder_initialized)
+      print('dc2', decoding)
     self._decoder_initialized = True
     return decoding
 
@@ -214,6 +269,8 @@ class TemporalPredictiveModel(Model.Model):
       self._register_training_start(sess)
       self.restore_model(sess)
 
+      ut.print_model_info(trainable=True)
+
       # MAIN LOOP
       try:
         for current_epoch in xrange(epochs_to_train):
@@ -240,9 +297,9 @@ class TemporalPredictiveModel(Model.Model):
       encoded = np.concatenate((encoded, encoding)) if encoded is not None else encoding
 
     for batch in self._batch_generator(blurred):
-      reco = sess.run([self._decode], feed_dict={self._input: batch[0]})[0]
+      reco, pred = sess.run([self._decode[1], self._decode[4]], feed_dict={self._input: batch[0]})
       break
-    return encoded, reco[:take], batch[0][:,1,:][:take]
+    return encoded, reco[:take], pred[:take]
 
   def _register_epoch(self, epoch, total_epochs, elapsed, sess):
     if Model.is_stopping_point(epoch, total_epochs, FLAGS.save_every):
