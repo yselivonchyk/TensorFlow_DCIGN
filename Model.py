@@ -30,7 +30,7 @@ tf.app.flags.DEFINE_integer('save_every', 250, 'Save model state every INT epoch
 tf.app.flags.DEFINE_integer('save_encodings_every', 5, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 
-tf.app.flags.DEFINE_integer('batch_size', 64, 'Batch size')
+tf.app.flags.DEFINE_integer('batch_size', 128, 'Batch size')
 tf.app.flags.DEFINE_float('learning_rate', 0.0001, 'Create visualization of ')
 
 tf.app.flags.DEFINE_float('dropout', 0.0, 'Dropout probability of pre-narrow units')
@@ -68,28 +68,9 @@ def get_every_dataset():
   return all_data
 
 
-def unpool(updates, mask, ksize=[1, 2, 2, 1]):
-  input_shape = updates.get_shape().as_list()
-  #  calculation new shape
-  output_shape = (input_shape[0], input_shape[1] * ksize[1], input_shape[2] * ksize[2], input_shape[3])
-  # calculation indices for batch, height, width and feature maps
-  one_like_mask = tf.ones_like(mask)
-  batch_range = tf.reshape(tf.range(output_shape[0], dtype=tf.int64), shape=[input_shape[0], 1, 1, 1])
-  b = one_like_mask * batch_range
-  y = mask // (output_shape[2] * output_shape[3])
-  x = mask % (output_shape[2] * output_shape[3]) // output_shape[3]
-  feature_range = tf.range(output_shape[3], dtype=tf.int64)
-  f = one_like_mask * feature_range
-  # transpose indices & reshape update values to one dimension
-  updates_size = tf.size(updates)
-  indices = tf.transpose(tf.reshape(tf.stack([b, y, x, f]), [4, updates_size]))
-  values = tf.reshape(updates, [updates_size])
-  ret = tf.scatter_nd(indices, values, output_shape)
-  return ret
-
-
 class Model:
   model_id = 'base'
+  dataset = None
   test_set = None
 
   _writer, _saver = None, None
