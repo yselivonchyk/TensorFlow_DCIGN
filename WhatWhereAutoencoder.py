@@ -2,6 +2,7 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 import numpy as np
 import utils as ut
+import network_utils as nut
 import activation_functions as act
 import Model
 import time
@@ -26,76 +27,6 @@ def _get_stats_template():
     'reconstruction': [],
     'total_loss': 0,
   }
-
-
-def _upsample_along_axis(volume, axis, stride, mode='ZEROS'):
-  assert mode in ['COPY', 'ZEROS']
-  assert 0 <= axis < len(volume.shape)
-
-  shape = volume.get_shape().as_list()
-  target_shape = shape[:]
-  target_shape[axis] *= stride
-
-  padding = tf.zeros(shape, dtype=volume.dtype) if mode == 'ZEROS' else volume
-  parts = [volume] + [padding for _ in range(stride - 1)]
-  print(padding)
-  volume = tf.concat(parts, min(axis+1, len(shape)-1))
-
-  volume = tf.reshape(volume, target_shape)
-  return volume
-
-
-def upsample(net, stride):
-  with tf.name_scope('Upsampling'):
-    net = _upsample_along_axis(net, 2, stride, mode='ZEROS')
-    net = _upsample_along_axis(net, 1, stride, mode='ZEROS')
-    return net
-
-
-# Thank you, @https://github.com/Pepslee
-def unpool(net, mask, stride):
-  assert mask is not None
-  with tf.name_scope('UnPool2D'):
-    ksize = [1, stride, stride, 1]
-    input_shape = net.get_shape().as_list()
-    #  calculation new shape
-    output_shape = (input_shape[0], input_shape[1] * ksize[1], input_shape[2] * ksize[2], input_shape[3])
-    # calculation indices for batch, height, width and feature maps
-    one_like_mask = tf.ones_like(mask)
-    batch_range = tf.reshape(tf.range(output_shape[0], dtype=tf.int64), shape=[input_shape[0], 1, 1, 1])
-    b = one_like_mask * batch_range
-    y = mask // (output_shape[2] * output_shape[3])
-    x = mask % (output_shape[2] * output_shape[3]) // output_shape[3]
-    feature_range = tf.range(output_shape[3], dtype=tf.int64)
-    f = one_like_mask * feature_range
-    # transpose indices & reshape update values to one dimension
-    updates_size = tf.size(net)
-    indices = tf.transpose(tf.reshape(tf.stack([b, y, x, f]), [4, updates_size]))
-    values = tf.reshape(net, [updates_size])
-    ret = tf.scatter_nd(indices, values, output_shape)
-    return ret
-
-
-def max_pool_with_argmax(net, stride):
-  """
-  Tensorflow default implementation does not provide gradient operation on max_pool_with_argmax
-  Therefore, we use max_pool_with_argmax to extract mask and
-  plain max_pool for, eeem... max_pooling.
-  """
-
-  if CPU_ONLY:
-    # max_pool_with_argmax would only work on GPU, by the way
-    return
-
-  with tf.name_scope('MaxPoolArgMax'):
-    _, mask = tf.nn.max_pool_with_argmax(
-      net,
-      ksize=[1, stride, stride, 1],
-      strides=[1, stride, stride, 1],
-      padding='SAME')
-    mask = tf.stop_gradient(mask)
-    net = slim.max_pool2d(net, kernel_size=[stride, stride])
-    return net, mask
 
 
 def _draw_subplot(input, index, name):
@@ -150,12 +81,12 @@ class WhatWhereAutoencoder(Model.Model):
     # Encoder. (16)5c-(32)3c-Xp
     net = slim.conv2d(self._input, 16, [5, 5])
     net = slim.conv2d(net, 32, [3, 3])
-    if not naive:
-      self._encode, mask = max_pool_with_argmax(net, FLAGS.pool_size)
-      net = unpool(self._encode, mask, stride=FLAGS.pool_size)
+    if not naive and not CPU_ONLY:
+      self._encode, mask = nut.max_pool_with_argmax(net, FLAGS.pool_size)
+      net = nut.unpool(self._encode, mask, stride=FLAGS.pool_size)
     else:
       self._encode = slim.max_pool2d(net, kernel_size=[FLAGS.pool_size, FLAGS.pool_size])
-      net = upsample(self._encode, stride=FLAGS.pool_size)
+      net = nut.upsample(self._encode, stride=FLAGS.pool_size)
 
     net = slim.conv2d_transpose(net, 16, [3, 3])
     net = slim.conv2d_transpose(net, 1, [5, 5])
@@ -246,35 +177,10 @@ class WhatWhereAutoencoder(Model.Model):
       summary_op = tf.summary.image("what_where", image)
       self.summary_writer.add_summary(summary_op.eval())
 
-
   def _register_epoch(self, epoch, total_epochs, elapsed, sess):
     print(self._epoch_stats['total_loss'])
     if epoch + 1 != total_epochs:
       self._epoch_stats = self._get_stats_template()
-
-
-def expand_xy(volume, stride, mode='ZEROS'):
-  assert mode in ['COPY', 'ZEROS']
-  volume = _upsample_dimension(volume, 2, stride, mode)
-  volume = _upsample_dimension(volume, 1, stride, mode)
-  return volume
-
-
-def _upsample_dimension(volume, dim, stride, mode='ZEROS'):
-  assert mode in ['COPY', 'ZEROS']
-  assert 0 <= dim < len(volume.shape)
-
-  shape = list(volume.shape)
-  target_shape = shape[:]
-  target_shape[dim] *= stride
-
-  padding = np.zeros(volume.shape) if mode == 'ZEROS' else volume
-  parts = [volume] + [padding for _ in range(stride - 1)]
-  volume = np.concatenate(parts, axis=min(dim+1, len(shape)-1))
-
-  print(target_shape)
-  volume = volume.reshape(target_shape)
-  return volume
 
 
 if __name__ == '__main__':

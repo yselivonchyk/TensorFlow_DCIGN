@@ -9,10 +9,10 @@ import pickle
 from scipy import misc
 import re
 import sys
-import tools.checkpoint_utils as ch_utils
 import subprocess as sp
 import warnings
 import functools
+# import scipy.stats as st
 
 
 
@@ -25,6 +25,7 @@ _start_time = None
 
 
 # CONSOLE OPERATIONS
+
 
 def reset_start_time():
   global _start_time
@@ -88,6 +89,7 @@ def mnist_select_n_classes(train_images, train_labels, num_classes, min=None, sc
 
 
 # IMAGE OPERATIONS
+
 
 def _save_image(name='image', save_params=None, image=None):
   if save_params is not None and 'e' in save_params and save_params['e'] < EPOCH_THRESHOLD:
@@ -209,6 +211,7 @@ def plot_epoch_progress(meta, data, interactive=False):
 
 
 # FILE name operation
+
 
 def _abbreviate_string(value):
   str_value = str(value)
@@ -340,31 +343,6 @@ def concatenate(x, y, take=None):
 
 # MISC
 
-def print_model_info(trainable=False):
-  if not trainable:
-    for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES):
-      print(v.name, v.get_shape())
-  else:
-    for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
-      value = v.eval()
-      print('TRAINABLE_VARIABLES', v.name, v.get_shape(), 'm:%.4f v:%.4f' % (value.mean(), value.std()))
-
-
-def list_checkpoint_vars(folder):
-  f = ch_utils.list_variables(folder)
-  print('\n'.join(map(str, f)))
-
-
-def list_encodings(folder):
-  assert folder and os.path.exists(folder)
-  for root, dirs, files in os.walk(folder):
-    files = list(filter(lambda file: 'encodings' in file and '.txt' in file, files))
-    files.sort()
-    files = list(map(lambda file: os.path.join(root, file), files))
-    if not files or len(files) == 0:
-      print_info('Folder %s contains no embedding files' % folder)
-    return files
-
 
 def list_object_attributes(obj):
   print('Object type: %s\t\tattributes:' % str(type(obj)))
@@ -456,6 +434,27 @@ def parse_params():
       params[param[1:]] = sys.argv[i+1]
   print(params)
   return params
+
+
+# def _build_gaussian_kernel(k_size, nsig, channels):
+#   interval = (2 * nsig + 1.) / k_size
+#   x = np.linspace(-nsig - interval / 2., nsig + interval / 2., k_size + 1)
+#   kern1d = np.diff(st.norm.cdf(x))
+#   kernel_raw = np.sqrt(np.outer(kern1d, kern1d))
+#   kernel = kernel_raw / kernel_raw.sum()
+#   out_filter = np.array(kernel, dtype=np.float32)
+#   out_filter = out_filter.reshape((k_size, k_size, 1, 1))
+#   out_filter = np.repeat(out_filter, channels, axis=2)
+#   return out_filter
+#
+#
+# def blur_gaussian(input, sigma, filter_size):
+#   num_channels = input.get_shape().as_list()[3]
+#   with tf.variable_scope('gaussian_filter'):
+#     kernel = _build_gaussian_kernel(filter_size, sigma, num_channels)
+#     kernel = tf.Variable(tf.convert_to_tensor(kernel), name='gauss_weight')
+#     output = tf.nn.depthwise_conv2d(input, kernel, [1, 1, 1, 1], padding='SAME')
+#     return output, kernel
 
 
 if __name__ == '__main__':
