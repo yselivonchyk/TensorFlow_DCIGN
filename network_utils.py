@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import tools.checkpoint_utils as ch_utils
+import scipy.stats as st
 
 
 # POOLING
@@ -20,7 +21,7 @@ def max_pool_with_argmax(net, stride):
       strides=[1, stride, stride, 1],
       padding='SAME')
     mask = tf.stop_gradient(mask)
-    net = slim.max_pool2d(net, kernel_size=[stride, stride],  stride=FLAGS.pool_size)
+    net = slim.max_pool2d(net, kernel_size=[stride, stride],  stride=stride)
     return net, mask
 
 
@@ -103,3 +104,32 @@ def print_model_info(trainable=False):
 def list_checkpoint_vars(folder):
   f = ch_utils.list_variables(folder)
   print('\n'.join(map(str, f)))
+
+
+def get_variable(checkpoint, name):
+  var = ch_utils.load_variable(tf.train.latest_checkpoint(checkpoint), name)
+  return var
+
+
+# Gaussian blur
+
+
+def _build_gaussian_kernel(k_size, nsig, channels):
+  interval = (2 * nsig + 1.) / k_size
+  x = np.linspace(-nsig - interval / 2., nsig + interval / 2., k_size + 1)
+  kern1d = np.diff(st.norm.cdf(x))
+  kernel_raw = np.sqrt(np.outer(kern1d, kern1d))
+  kernel = kernel_raw / kernel_raw.sum()
+  out_filter = np.array(kernel, dtype=np.float32)
+  out_filter = out_filter.reshape((k_size, k_size, 1, 1))
+  out_filter = np.repeat(out_filter, channels, axis=2)
+  return out_filter
+
+
+def blur_gaussian(input, sigma, filter_size):
+  num_channels = input.get_shape().as_list()[3]
+  with tf.variable_scope('gaussian_filter'):
+    kernel = _build_gaussian_kernel(filter_size, sigma, num_channels)
+    kernel = tf.Variable(tf.convert_to_tensor(kernel), name='gauss_weight')
+    output = tf.nn.depthwise_conv2d(input, kernel, [1, 1, 1, 1], padding='SAME')
+    return output, kernel

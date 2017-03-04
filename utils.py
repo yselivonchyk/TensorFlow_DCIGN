@@ -187,98 +187,8 @@ def reconstruct_images_epochs(epochs, original=None, save_params=None, img_shape
   _save_image(save_params=save_params, image=full_picture)
 
 
-def plot_epoch_progress(meta, data, interactive=False):
-  plt.figure()
-  backup_path = to_file_name(meta, IMAGE_FOLDER, 'txt')
-  png_path = to_file_name(meta, IMAGE_FOLDER, 'png')
-  meta['time'] = datetime.datetime.now()
-  pickle.dump((meta, data), open(backup_path, "wb"))
-
-  lines = ['--', ':', '-', '-.']
-  for j, experiment in enumerate(data):
-    line = lines[int(j / 7) % len(lines)]
-    x = np.arange(0, len(experiment[1])) + 1
-    accuracy = int(np.min(experiment[1]))
-    label = experiment[0] if str(accuracy) in experiment[0] else experiment[0] + str(accuracy)
-    plt.semilogy(x, experiment[1], label=label, marker='.', linestyle=line)
-  plt.xlim([1, x[-1]])
-  plt.legend(loc='best', fancybox=True, framealpha=0.5, fontsize=8)
-  plt.savefig(png_path, dpi=300, facecolor='w', edgecolor='w',
-              transparent=False, bbox_inches='tight', pad_inches=0.1,
-              frameon=None)
-  if interactive:
-    plt.show()
-
-
-# FILE name operation
-
-
-def _abbreviate_string(value):
-  str_value = str(value)
-  abbr = [letter for letter in str_value if letter.isupper()]
-  if len(abbr) > 1:
-    return ''.join(abbr)
-
-  if len(str_value.split('_')) > 2:
-    parts = str_value.split('_')
-    letters = ''.join(x[0] for x in parts)
-    return letters
-  return value
-
-
-def to_file_name(obj, folder=None, ext=None, append_timestamp=False):
-  name, postfix = '', ''
-  od = collections.OrderedDict(sorted(obj.items()))
-  for _, key in enumerate(od):
-    value = obj[key]
-    if value is None:
-      value = 'na'
-    #FUNC and OBJECTS
-    if 'function' in str(value):
-      value = str(value).split()[1].split('.')[0]
-      parts = value.split('_')
-      if len(parts) > 1:
-        value = ''.join(list(map(lambda x: x.upper()[0], parts)))
-    elif ' at ' in str(value):
-      value = (str(value).split()[0]).split('.')[-1]
-      value = _abbreviate_string(value)
-    elif isinstance(value, type):
-      value = _abbreviate_string(value.__name__)
-    # FLOATS
-    if isinstance(value, float) or isinstance(value, np.float32):
-      if value < 0.0001:
-        value = '%.6f' % value
-      elif value > 1000000:
-        value = '%.0f' % value
-      else:
-        value = '%.4f' % value
-      value = value.rstrip('0')
-    #INTS
-    if isinstance(value, int):
-      value = '%02d' % value
-    #LIST
-    if isinstance(value, list):
-      value = '|'.join(map(str, value))
-
-    truncate_threshold = 20
-    value = _abbreviate_string(value)
-    if len(value) > truncate_threshold:
-      print_info('truncating this: %s %s' % (key, value))
-      value = value[0:20]
-
-    if 'suf' in key or 'postf' in key:
-      continue
-
-    name += '__%s|%s' % (key, str(value))
-
-  if 'suf' in obj:
-    prefix_value = obj['suf']
-  else:
-    prefix_value = FLAGS.suffix
-  if 'postf' in obj:
-    prefix_value += '_%s' % obj['postf']
-  name = prefix_value + name
-
+def model_to_file_name(FLAGS, folder=None, ext=None):
+  name = '%s__i_%s' % (FLAGS.net.replace('-', '_'), FLAGS.input_name)
   if ext:
     name += '.' + ext
   if folder:
@@ -294,19 +204,11 @@ def mkdir(folders):
       os.mkdir(folder)
 
 
-def configure_folders(FLAGS, meta):
-  folder_meta = meta.copy()
-  folder_meta.pop('init')
-  folder_meta.pop('lr')
-  folder_meta.pop('opt')
-  folder_meta.pop('bs')
-  folder_name = to_file_name(folder_meta) + '/'
-  checkpoint_folder = os.path.join(TEMP_FOLDER, folder_name)
-  log_folder = os.path.join(checkpoint_folder, 'log')
-  mkdir([TEMP_FOLDER, IMAGE_FOLDER, checkpoint_folder, log_folder])
-  FLAGS.save_path = checkpoint_folder
-  FLAGS.logdir = log_folder
-  return checkpoint_folder, log_folder
+def configure_folders(FLAGS):
+  folder_name = model_to_file_name(FLAGS) + '/'
+  FLAGS.save_path = os.path.join(TEMP_FOLDER, folder_name)
+  FLAGS.logdir = os.path.join(FLAGS.save_path, 'log')
+  mkdir([TEMP_FOLDER, IMAGE_FOLDER, FLAGS.save_path, FLAGS.logdir])
 
 
 def get_latest_file(folder="./visualizations/", filter=None):
@@ -434,6 +336,13 @@ def parse_params():
       params[param[1:]] = sys.argv[i+1]
   print(params)
   return params
+
+
+def print_flags(FLAGS):
+  x = FLAGS.input_path
+  res = str(FLAGS.__dict__['__flags'])
+  res = res.replace(', ', '\n')
+  print_info(res)
 
 
 # def _build_gaussian_kernel(k_size, nsig, channels):

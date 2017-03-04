@@ -124,12 +124,7 @@ def visualize_encoding(encodings, folder=None, meta={}, original=None, reconstru
 
 
 # @ut.timeit
-def plot_encoding_crosssection(encodings, folder=None, meta={}, original=None, reconstruction=None, interactive=False):
-  file_path = None
-
-  if folder:
-    meta['postfix'] = 'cross'
-    file_path = ut.to_file_name(meta, folder, 'jpg')
+def plot_encoding_crosssection(encodings, file_path, original=None, reconstruction=None, interactive=False):
   encodings = manual_pca(encodings)
 
   fig = _get_figure()

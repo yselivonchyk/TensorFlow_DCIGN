@@ -2,23 +2,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import network_utils as nut
-
-
-class Bunch(object):
-  def __init__(self, **kwds):
-    self.__dict__.update(kwds)
-
-  def __eq__(self, other):
-    return self.__dict__ == other.__dict__
-
-  def __str__(self):
-    string = "BUNCH {" + str(self.__dict__)[2:]
-    string = string.replace("': ", ":")
-    string = string.replace(", '", ", ")
-    return string
-
-  def __repr__(self):
-    return str(self)
+from Bunch import Bunch
 
 
 INPUT = 'input'
@@ -54,7 +38,7 @@ def build_encoder(net, layer_config, i=1):
   cfg = layer_config[i]
   cfg.shape = net.get_shape().as_list()
   if cfg.type == FC:
-    if i > 0 and layer_config[i-1].type == CONV:
+    if len(cfg.shape) > 2:
       net = slim.flatten(net)
     net = slim.fully_connected(net, cfg.size, activation_fn=cfg.activation)
   elif cfg.type == CONV:
@@ -89,7 +73,7 @@ def build_decoder(net, layer_config, i=None):
     cfg.arg2 = net
   elif cfg.type == INPUT:
     if layer_config[1].type == FC:
-      net = slim.fully_connected(net, int(np.prod(cfg.shape)), activation_fn=tf.nn.relu)
+      net = slim.fully_connected(net, int(np.prod(cfg.shape[1:])), activation_fn=tf.nn.relu)
       net = tf.reshape(net, cfg.shape)
       print('decoder_%d' % i, net)
     return net
@@ -154,5 +138,6 @@ def parse_input(input):
 
 
 if __name__ == '__main__':
-  build_model(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3-f10')
-  build_model(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c-f12-f6')
+  # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3-f10')
+  # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c-f12-f6')
+  build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), 'f100-f10')
