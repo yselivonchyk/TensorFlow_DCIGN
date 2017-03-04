@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import network_utils as nut
+import utils as ut
 from Bunch import Bunch
 
 
@@ -21,13 +22,17 @@ activation_voc = {
 }
 
 
+CONFIG_COLOR = 30
+PADDING = 'VALID'
+
+
 def build_autoencoder(input, layer_config):
   layer_config = layer_config.split('-')
   layer_config = [parse_input(input)] + [parse(x) for x in layer_config]
-
+  ut.print_info('Model config:', color=CONFIG_COLOR)
   enc = build_encoder(input, layer_config)
   dec = build_decoder(enc, layer_config)
-  losses = [l2_loss(input, dec)] + build_losses(layer_config)
+  losses = build_losses(layer_config)
   return enc, dec, losses
 
 
@@ -42,7 +47,8 @@ def build_encoder(net, layer_config, i=1):
       net = slim.flatten(net)
     net = slim.fully_connected(net, cfg.size, activation_fn=cfg.activation)
   elif cfg.type == CONV:
-    net = slim.conv2d(net, cfg.size, [cfg.kernel, cfg.kernel], activation_fn=cfg.activation)
+    net = slim.conv2d(net, cfg.size, [cfg.kernel, cfg.kernel],
+                      activation_fn=cfg.activation, padding=PADDING)
   elif cfg.type == POOL:
     net = slim.max_pool2d(net, kernel_size=[cfg.kernel, cfg.kernel], stride=cfg.kernel)
   elif cfg.type == DO:
@@ -51,7 +57,7 @@ def build_encoder(net, layer_config, i=1):
     cfg.arg1 = net
   elif cfg.type == INPUT:
     assert False
-  print('encoder_%d' % i, cfg.shape, net)
+  ut.print_info('encoder_%d\t%s\t%s' % (i, str(cfg.shape), str(net)), color=CONFIG_COLOR)
   return build_encoder(net, layer_config, i + 1)
 
 
@@ -61,10 +67,11 @@ def build_decoder(net, layer_config, i=None):
   cfg = layer_config[i]
   if cfg.type == FC:
     net = slim.fully_connected(net, int(np.prod(cfg.shape[1:])), activation_fn=cfg.activation)
-    if layer_config[i-1].type == CONV:
+    if layer_config[i-1].type != FC:
       net = tf.reshape(net, cfg.shape)
   elif cfg.type == CONV:
-    net = slim.conv2d_transpose(net, cfg.shape[-1], [cfg.kernel, cfg.kernel])
+    net = slim.conv2d_transpose(net, cfg.shape[-1], [cfg.kernel, cfg.kernel],
+                                activation_fn=cfg.activation, padding=PADDING)
   elif cfg.type == POOL:
     net = nut.upsample(net, cfg.kernel)
   elif cfg.type == DO:
@@ -72,12 +79,12 @@ def build_decoder(net, layer_config, i=None):
   elif cfg.type == LOSS:
     cfg.arg2 = net
   elif cfg.type == INPUT:
-    if layer_config[1].type == FC:
-      net = slim.fully_connected(net, int(np.prod(cfg.shape[1:])), activation_fn=tf.nn.relu)
-      net = tf.reshape(net, cfg.shape)
-      print('decoder_%d' % i, net)
+    # if layer_config[1].type == FC:
+    #   net = slim.fully_connected(net, int(np.prod(cfg.shape[1:])), activation_fn=tf.nn.relu)
+    #   net = tf.reshape(net, cfg.shape)
+    #   print('decoder_%d' % i, net)
     return net
-  print('decoder_%d' % i, net)
+  ut.print_info('decoder_%d \t%s' % (i, str(net)), color=CONFIG_COLOR)
   return build_decoder(net, layer_config, i-1)
 
 

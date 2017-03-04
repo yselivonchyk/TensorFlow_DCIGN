@@ -139,7 +139,8 @@ def _construct_img_shape(img):
 
 def images_to_uint8(func):
   def normalize(arr):
-    if type(arr) == np.ndarray and arr.dtype != np.uint8 and len(arr.shape) >= 3:
+    # if type(arr) == np.ndarray and arr.dtype != np.uint8 and len(arr.shape) >= 3:
+    if type(arr) == np.ndarray and len(arr.shape) >= 3:
       if np.min(arr) < 0:
         print('image array normalization: negative values')
       if np.max(arr) < 10:

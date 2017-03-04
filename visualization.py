@@ -78,7 +78,8 @@ def manual_pca(data, std_threshold=0.01, num_threshold=3):
 
   meaningless = [order[i] for i, x in enumerate(std) if x <= std_threshold]
   if any(meaningless) and data.shape[1] > 3:
-    ut.print_info('meaningless dimensions on visualization: %s' % str(meaningless))
+    # ut.print_info('meaningless dimensions on visualization: %s' % str(meaningless))
+    pass
 
   order = [order[i] for i, x in enumerate(std) if x > std_threshold or i < num_threshold]
   order.sort()
@@ -117,6 +118,7 @@ def visualize_encoding(encodings, folder=None, meta={}, original=None, reconstru
     if picture.shape[-1] == 1:
       picture = picture.squeeze()
     plt.subplot(subplot).imshow(picture)
+    plt.subplot(subplot).axis('off')
 
     visualize_encodings(encodings, file_name=file_path, fig=fig, grid=(3, 5), skip_every=5)
   else:
@@ -125,6 +127,9 @@ def visualize_encoding(encodings, folder=None, meta={}, original=None, reconstru
 
 # @ut.timeit
 def plot_encoding_crosssection(encodings, file_path, original=None, reconstruction=None, interactive=False):
+  # print(encodings.shape)
+  # print(original.shape)
+  # print(reconstruction.shape)
   encodings = manual_pca(encodings)
 
   fig = _get_figure()
@@ -173,9 +178,11 @@ def _stitch_images(*args):
   """Recieves one or many arrays of pictures and stitches them alongside into a column picture"""
   assert len(args) == 2
   lines, height, width, channels = args[0].shape
-  min = 0  # int(args[0].mean())
-
+  min = 0
   stack = args[0]
+  # print([(type(x), x.shape) for x in args])
+  # print(np.min(args[0]), np.max(args[0]), args[0].dtype, args[0].mean())
+  # print(np.min(args[1]), np.max(args[1]), args[1].dtype, args[1].mean())
   if len(args) > 1:
     for i in range(len(args) - 1):
       stack = np.concatenate((stack, args[i + 1]), axis=2)

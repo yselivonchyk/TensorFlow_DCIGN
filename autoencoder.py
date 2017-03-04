@@ -22,7 +22,7 @@ from Bunch import Bunch
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_string('net', 'f100-f4', 'model configuration')
+tf.app.flags.DEFINE_string('net', '10c5-16c3-f4', 'model configuration')
 tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
 
 tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
@@ -34,7 +34,7 @@ tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 tf.app.flags.DEFINE_boolean('dev', False, 'Indicate development mode')
 
 tf.app.flags.DEFINE_integer('batch_size', 128, 'Batch size')
-tf.app.flags.DEFINE_float('learning_rate', 0.0001, 'Create visualization of ')
+tf.app.flags.DEFINE_float('learning_rate', 0.001, 'Create visualization of ')
 
 tf.app.flags.DEFINE_float('blur', 2.0, 'Max sigma value for Gaussian blur applied to training set')
 tf.app.flags.DEFINE_integer('blur_decrease', 1000, 'Decrease image blur every X steps')
@@ -57,7 +57,8 @@ def _fetch_dataset(path, take=None):
   dataset = inp.read_ds_zip(path)  # read
   take = len(dataset) if take is None else take
   dataset = dataset[:take]
-  dataset = inp.rescale_ds(dataset, 0, 1)
+  # print(dataset.dtype, dataset.shape, np.min(dataset), np.max(dataset))
+  # dataset = inp.rescale_ds(dataset, 0, 1)
   return dataset
 
 
@@ -98,7 +99,7 @@ class Autoencoder:
 
 
   def get_past_epochs(self):
-    return int(self.step_var.eval() / FLAGS.epoch_size)
+    return int(self.step_var.eval() / self.epoch_size)
 
   @staticmethod
   def get_checkpoint_path():
@@ -125,7 +126,7 @@ class Autoencoder:
 
   def _batch_generator(self, dataset=None, shuffle=True, batches=None):
     """Returns BATCH_SIZE of couples of subsequent images"""
-    batches = min(self.epoch_size, batches)
+    batches = batches if batches is not None else self.epoch_size
     dataset = dataset if dataset is not None else self._get_blurred_dataset()
     self.permutation = np.arange(len(dataset))
     self.permutation = self.permutation if not shuffle else np.random.permutation(self.permutation)
@@ -133,7 +134,7 @@ class Autoencoder:
     for i in range(batches):
       batch_indexes = self.permutation[i * FLAGS.batch_size:(i + 1) * FLAGS.batch_size]
       # batch = np.stack((dataset[batch_indexes], dataset[batch_indexes + 1], dataset[batch_indexes + 2]), axis=1)
-      batch =dataset[batch_indexes]
+      batch = dataset[batch_indexes]
       yield batch, batch
 
   def _get_blur_sigma(self):
@@ -145,26 +146,34 @@ class Autoencoder:
       current_sigma = self._get_blur_sigma()
       if current_sigma != self._last_blur:
         self._last_blur = current_sigma
-        self._blurred_dataset = inp.apply_gaussian(self.dataset, sigma=current_sigma)
-      return self._blurred_dataset if self._blurred_dataset is not None else self.dataset
+        self._blurred_dataset = inp.apply_gaussian(self.train_set, sigma=current_sigma)
+      return self._blurred_dataset if self._blurred_dataset is not None else self.train_set
+    return self.train_set
 
 
   # TRAIN
 
 
   def build_model(self):
-    self.input = tf.placeholder(tf.float32, self.batch_shape, name='input')
-    self.target = tf.placeholder(tf.float32, self.batch_shape, name='target')
+    self.input = tf.placeholder(tf.uint8, self.batch_shape, name='input')
+    self.target = tf.placeholder(tf.uint8, self.batch_shape, name='target')
 
-    self.encode, self.decode, _ = model_interpreter.build_autoencoder(self.input, FLAGS.net)
+    self.step_var = tf.Variable(0, trainable=False, name='global_step')
+    self.step = tf.assign(self.step_var, self.step_var + 1)
 
-    self.loss = model_interpreter.l2_loss(self.input, self.decode, name='reconstruction')
+    with tf.name_scope('args_transform'):
+      input = tf.cast(self.input, tf.float32) / 255.
+      target = tf.cast(self.target, tf.float32) / 255.
 
+    self.encode, self.decode, _ = model_interpreter.build_autoencoder(input, FLAGS.net)
+    self.loss = model_interpreter.l2_loss(target, self.decode, name='reconstruction')
     self.optimizer = self.optimizer_constructor(learning_rate=FLAGS.learning_rate)
     self.train = self.optimizer.minimize(self.loss)
 
-    self.decode = tf.nn.relu(self.decode)
-    self.decode = tf.cast(self.decode <= 1, self.decode.dtype) * self.decode
+    with tf.name_scope('to_image'):
+      self.decode = tf.nn.relu(self.decode)
+      self.decode = tf.cast(self.decode <= 1, self.decode.dtype) * self.decode * 255
+      self.decode = tf.cast(self.decode, tf.uint8)
 
   def train(self, epochs_to_train=5):
     ut.configure_folders(FLAGS)
@@ -181,8 +190,9 @@ class Autoencoder:
           for batch in self._batch_generator():
             encoding, reconstruction, loss, _, step = \
               sess.run(
-                [self.encode, self.decode, self.reco_loss, self.train, self.step],
-                feed_dict={self.input: batch[0]})
+                [self.encode, self.decode, self.loss, self.train, self.step],
+                feed_dict={self.input: batch[0], self.target: batch[1]})
+            # print(np.min(reconstruction), np.max(reconstruction))
             self._on_batch_finish(loss, batch, encoding, reconstruction)
           self._on_epoch_finish(current_epoch, epochs_to_train, start, sess)
         self._on_training_finish()
@@ -242,11 +252,11 @@ class Autoencoder:
     if is_stopping_point(epoch, total_epochs, FLAGS.save_every):
       self.saver.save(sess, self.get_checkpoint_path())
 
-    accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / FLAGS.epoch_size)
+    accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
 
     if is_stopping_point(epoch, total_epochs, FLAGS.save_encodings_every):
       evaluation = self.evaluate(sess, take=FLAGS.visualiza_max)
-      print(evaluation.encoded.shape, evaluation.reconstructed.shape, evaluation.source.shape)
+      # print(evaluation.encoded.shape, evaluation.reconstructed.shape, evaluation.source.shape)
       data = {
         'enc': np.asarray(evaluation.encoded),
         'rec': np.asarray(evaluation.reconstructed),
@@ -272,7 +282,7 @@ class Autoencoder:
     accuracy_info = '' if accuracy is None else '| accuracy %d' % int(accuracy)
     epoch_past_info = '' if epochs_past is None else '+%d' % (epochs_past - 1)
     epoch_count = 'Epochs %2d/%d%s' % (current_epoch + 1, epochs, epoch_past_info)
-    time_info = '%2dms/bt' % (elapsed / FLAGS.epoch_size * 1000)
+    time_info = '%2dms/bt' % (elapsed / self.epoch_size * 1000)
 
     info_string = ' '.join([
       epoch_count,
