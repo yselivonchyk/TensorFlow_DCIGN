@@ -23,7 +23,7 @@ activation_voc = {
 
 
 CONFIG_COLOR = 30
-PADDING = 'VALID'
+PADDING = 'SAME'
 
 
 def build_autoencoder(input, layer_config):

@@ -90,5 +90,5 @@ ENV/
 
 
 # Custom
-.ides/
+.idea/
 tmp/

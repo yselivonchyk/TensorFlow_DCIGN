@@ -9,7 +9,6 @@ import os
 import numpy as np
 import utils as ut
 import input as inp
-import tools.checkpoint_utils as ch_utils
 import visualization as vis
 import matplotlib.pyplot as plt
 import time
@@ -22,7 +21,7 @@ from Bunch import Bunch
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_string('net', '10c5-16c3-f4', 'model configuration')
+tf.app.flags.DEFINE_string('net', '32c3-p2-16c3-p2-8c3-f4', 'model configuration')
 tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
 
 tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
@@ -136,6 +135,8 @@ class Autoencoder:
       # batch = np.stack((dataset[batch_indexes], dataset[batch_indexes + 1], dataset[batch_indexes + 2]), axis=1)
       batch = dataset[batch_indexes]
       yield batch, batch
+
+  _blurred_dataset, _last_blur = None, 0
 
   def _get_blur_sigma(self):
     calculated_sigma = FLAGS.blur - int(10 * self.step_var.eval() / FLAGS.blur_decrease) / 10.0

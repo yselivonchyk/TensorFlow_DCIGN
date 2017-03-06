@@ -3,7 +3,7 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import tools.checkpoint_utils as ch_utils
 import scipy.stats as st
-
+import inspect
 
 # POOLING
 
@@ -82,8 +82,8 @@ def _upsample_along_axis(volume, axis, stride, mode='ZEROS'):
 
   padding = tf.zeros(shape, dtype=volume.dtype) if mode == 'ZEROS' else volume
   parts = [volume] + [padding for _ in range(stride - 1)]
+  assert list(inspect.signature(tf.concat).parameters.items())[1][0] == 'axis', 'Wrong TF version'
   volume = tf.concat(parts, min(axis+1, len(shape)-1))
-
   volume = tf.reshape(volume, target_shape)
   return volume
 
