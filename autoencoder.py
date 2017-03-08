@@ -21,7 +21,7 @@ from Bunch import Bunch
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_string('net', '32c3-p2-16c3-p2-8c3-f4', 'model configuration')
+tf.app.flags.DEFINE_string('net', 'f10', 'model configuration')
 tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
 
 tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
@@ -123,10 +123,29 @@ class Autoencoder:
     take_test = int(FLAGS.test_max) if FLAGS.test_max > 1 else int(FLAGS.test_max * len(self.test_set))
     self.test_set = self.test_set[:take_test]
 
-  def _batch_generator(self, dataset=None, shuffle=True, batches=None):
+  def _batch_generator(self, x=None, y=None, shuffle=True, batches=None):
     """Returns BATCH_SIZE of couples of subsequent images"""
-    batches = batches if batches is not None else self.epoch_size
+    x = x if x is not None else self._get_blurred_dataset()
+    y = y if y is not None else x
+    batches = batches if batches is not None else int(np.floor(len(x) / FLAGS.batch_size))
+    self.permutation = np.arange(len(x))
+    self.permutation = self.permutation if not shuffle else np.random.permutation(self.permutation)
+
+    for i in range(batches):
+      batch_indexes = self.permutation[i * FLAGS.batch_size:(i + 1) * FLAGS.batch_size]
+      # batch = np.stack((dataset[batch_indexes], dataset[batch_indexes + 1], dataset[batch_indexes + 2]), axis=1)
+      yield x[batch_indexes], y[batch_indexes]
+
+  def _batch_permutation_generator(self, length, start=0, shuffle=True):
+    self.permutation = np.arange(length) + start
+    self.permutation = self.permutation if not shuffle else np.random.permutation(self.permutation)
+    for i in range(int(length/FLAGS.batch_size)):
+      yield self.permutation[i * FLAGS.batch_size:(i + 1) * FLAGS.batch_size]
+
+  def _eval_batch_generator(self, dataset=None, shuffle=True, batches=None):
+    """Returns BATCH_SIZE of couples of subsequent images"""
     dataset = dataset if dataset is not None else self._get_blurred_dataset()
+    batches = batches if batches is not None else np.floor(len(dataset)/FLAGS.batch_size)
     self.permutation = np.arange(len(dataset))
     self.permutation = self.permutation if not shuffle else np.random.permutation(self.permutation)
 
@@ -200,12 +219,34 @@ class Autoencoder:
       except KeyboardInterrupt:
         self._on_training_abort(sess)
 
-  def evaluate(self, sess, take):
+
+  def naive_evaluate(self, sess, take):
     digest = Bunch(encoded=None, reconstructed=None, source=None)
     blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
     for batch in self._batch_generator(blurred, shuffle=False):
       encoding = self.encode.eval(feed_dict={self.input: batch[0]})
       digest.encoded = ut.concatenate(digest.encoded, encoding)
+
+    for batch in self._batch_generator(blurred, batches=1):
+      digest.source = batch[1][:take]
+      digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
+    return digest
+
+
+  def evaluate(self, sess, take):
+    digest = Bunch(encoded=None, reconstructed=None, source=None,
+                   loss=.0, eval_loss=.0, dumb_loss=.0)
+    blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
+    for i, batch in enumerate(self._batch_generator(blurred, shuffle=False)):
+      encoding = self.encode.eval(feed_dict={self.input: batch[0]})
+      digest.encoded = ut.concatenate(digest.encoded, encoding)
+
+    expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
+    digest.size = len(expected)
+    for p in self._batch_permutation_generator(digest.size, shuffle=False):
+      digest.loss +=      self.loss.eval(feed_dict={self.encode.name: digest.encoded[p+2], self.target: blurred[p+2]})
+      digest.eval_loss += self.loss.eval(feed_dict={self.encode.name: expected[p],         self.target: blurred[p+2]})
+      digest.dumb_loss += self.loss.eval(feed_dict={self.input:       blurred[p],          self.target: blurred[p+2]})
 
     for batch in self._batch_generator(blurred, batches=1):
       digest.source = batch[1][:take]
@@ -263,15 +304,19 @@ class Autoencoder:
         'rec': np.asarray(evaluation.reconstructed),
         'blu': np.asarray(evaluation.source)
       }
-      meta = Bunch(suf='encodings', e='%06d' % int(self.get_past_epochs()), er=int(accuracy))
+      error_info = '%d(%d|%d|%d)' % (accuracy,
+                                     evaluation.loss/evaluation.size,
+                                     evaluation.eval_loss/evaluation.size,
+                                     evaluation.dumb_loss/evaluation.size)
+      meta = Bunch(suf='encodings', e='%06d' % int(self.get_past_epochs()), er=error_info)
       np.save(meta.to_file_name(folder=FLAGS.save_path), data)
-
       vis.plot_encoding_crosssection(
         evaluation.encoded,
         meta.to_file_name(FLAGS.save_path, 'jpg'),
         evaluation.source,
         evaluation.reconstructed,
         interactive=FLAGS.dev)
+
 
     self.stats.epoch_accuracy.append(accuracy)
     self._print_epoch_info(accuracy, epoch, total_epochs, elapsed)
@@ -285,10 +330,7 @@ class Autoencoder:
     epoch_count = 'Epochs %2d/%d%s' % (current_epoch + 1, epochs, epoch_past_info)
     time_info = '%2dms/bt' % (elapsed / self.epoch_size * 1000)
 
-    info_string = ' '.join([
-      epoch_count,
-      accuracy_info,
-      time_info])
+    info_string = ' '.join([epoch_count, accuracy_info, time_info])
 
     ut.print_time(info_string, same_line=True)
 

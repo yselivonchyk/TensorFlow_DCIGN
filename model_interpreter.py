@@ -3,6 +3,7 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import network_utils as nut
 import utils as ut
+import re
 from Bunch import Bunch
 
 
@@ -94,18 +95,19 @@ def build_losses(layer_config):
 
 def l2_loss(arg1, arg2, alpha=1.0, name='reco_loss'):
   error = slim.flatten(arg1) - slim.flatten(arg2)
-  loss = tf.nn.l2_loss(error, name=name)
+  loss = tf.nn.l2_loss(arg1-arg2, name=name)
   return alpha * loss
 
 
 def get_activation(descriptor):
   if 'c' not in descriptor and 'f' not in descriptor:
-    return None, descriptor
-
+    return None
   activation = tf.nn.relu if 'c' in descriptor else tf.nn.sigmoid
-  if descriptor[-1] not in activation_voc.keys():
-    return activation, descriptor
-  return activation_voc[descriptor[-1]], descriptor[:-1]
+  act_descriptor = re.search('r|s|i|t', descriptor)
+  if act_descriptor is None:
+    return activation
+  act_descriptor = act_descriptor.group(0)
+  return activation_voc[act_descriptor]
 
 
 def parse(descriptor):
@@ -113,14 +115,13 @@ def parse(descriptor):
 
   if 'f' in descriptor:
     item.type = FC
-    item.activation, descriptor = get_activation(descriptor)
-    item.size = int(descriptor[1:])
+    item.activation = get_activation(descriptor)
+    item.size = int(re.search('f\d+', descriptor).group(0)[1:])
   elif 'c' in descriptor:
     item.type = CONV
-    item.activation, descriptor = get_activation(descriptor)
-    params = descriptor.split('c')
-    item.size = int(params[0])
-    item.kernel = 3 if descriptor[-1] == 'c' else int(descriptor.split('c')[1])
+    item.activation = get_activation(descriptor)
+    item.kernel = int(re.search('c\d+', descriptor).group(0)[1:])
+    item.size = int(re.search('\d+c', descriptor).group(0)[:-1])
   elif 'd' in descriptor:
     item.type = DO
     item.keep_prob = float(descriptor[1:])
@@ -132,7 +133,7 @@ def parse(descriptor):
     item.loss_type = 'l2'
     item.alpha = float(descriptor.split('l')[0])
   else:
-    print('What is "%s"? Check your writing 16c2i-7c-p3-0.01l-f10t-d0.3' % descriptor)
+    print('What is "%s"? Check your writing 16c2i-7c3r-p3-0.01l-f10t-d0.3' % descriptor)
     assert False
   return item
 
@@ -145,6 +146,4 @@ def parse_input(input):
 
 
 if __name__ == '__main__':
-  # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3-f10')
-  # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c-f12-f6')
-  build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), 'f100-f10')
+  build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '10c3-f100-f10')
