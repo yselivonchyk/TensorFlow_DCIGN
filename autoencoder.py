@@ -21,7 +21,9 @@ from Bunch import Bunch
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_string('net', 'f10', 'model configuration')
+tf.app.flags.DEFINE_string('net', '5c3', 'model configuration')
+tf.app.flags.DEFINE_string('model_type', 'ae', 'Type of the model to use: Autoencoder (ae)'
+                                               'WhatWhereAe (ww) U-netAe (u)')
 tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
 
 tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
@@ -298,6 +300,11 @@ class Autoencoder:
 
     if is_stopping_point(epoch, total_epochs, FLAGS.save_encodings_every):
       evaluation = self.evaluate(sess, take=FLAGS.visualiza_max)
+
+      # Hack. Don't visualize ConvNets
+      if len(self.encode.get_shape().as_list()) > 2:
+        evaluation.encoded = np.random.randn(50, 2)
+
       # print(evaluation.encoded.shape, evaluation.reconstructed.shape, evaluation.source.shape)
       data = {
         'enc': np.asarray(evaluation.encoded),

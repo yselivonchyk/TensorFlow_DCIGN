@@ -126,6 +126,22 @@ def _build_gaussian_kernel(k_size, nsig, channels):
   return out_filter
 
 
+# def scope_wrapper(func, scope_name):
+#   def func_wrapper(*args, **kwargs):
+#     with tf.name_scope(scope_name):
+#       return func(*args, **kwargs)
+#   return func_wrapper
+
+
+def scope_wrapper(scope_name):
+  def scope_decorator(func):
+    def func_wrapper(*args, **kwargs):
+      with tf.name_scope(scope_name):
+        return func(*args, **kwargs)
+    return func_wrapper
+  return scope_decorator
+
+
 def blur_gaussian(input, sigma, filter_size):
   num_channels = input.get_shape().as_list()[3]
   with tf.variable_scope('gaussian_filter'):
