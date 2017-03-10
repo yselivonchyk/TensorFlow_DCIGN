@@ -15,14 +15,15 @@ import time
 import sys
 import getch
 import model_interpreter
+import network_utils as nut
 from Bunch import Bunch
 
 
-tf.app.flags.DEFINE_string('input_path', '../data/tmp/romb8.3.6.tar.gz', 'input folder')
+tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
-tf.app.flags.DEFINE_string('test_path', '../data/tmp/romb8.3.6.tar.gz', 'test set folder')
+tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
-tf.app.flags.DEFINE_string('model_type', 'ae', 'Type of the model to use: Autoencoder (ae)'
+tf.app.flags.DEFINE_string('model_type', 'blur', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
 tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
 
@@ -38,6 +39,7 @@ tf.app.flags.DEFINE_integer('batch_size', 128, 'Batch size')
 tf.app.flags.DEFINE_float('learning_rate', 0.0001, 'Create visualization of ')
 
 tf.app.flags.DEFINE_float('blur', 5.0, 'Max sigma value for Gaussian blur applied to training set')
+tf.app.flags.DEFINE_boolean('new_blur', True, '')
 tf.app.flags.DEFINE_integer('blur_decrease', 10000, 'Decrease image blur every X steps')
 
 FLAGS = tf.app.flags.FLAGS
@@ -71,6 +73,16 @@ def get_stats_template():
     reconstruction=[],
     total_loss=0.,
     start=time.time())
+
+
+def _blur_expand(input):
+  k_size = 9
+  kernels = [2, 4, 6]
+  channels = [input] + [nut.blur_gaussian(input, k, k_size)[0] for k in kernels]
+  # print(channels)
+  res = tf.concat(channels, axis=3)
+  # print(res)
+  return res
 
 
 class Autoencoder:
@@ -144,19 +156,6 @@ class Autoencoder:
     for i in range(int(length/FLAGS.batch_size)):
       yield self.permutation[i * FLAGS.batch_size:(i + 1) * FLAGS.batch_size]
 
-  def _eval_batch_generator(self, dataset=None, shuffle=True, batches=None):
-    """Returns BATCH_SIZE of couples of subsequent images"""
-    dataset = dataset if dataset is not None else self._get_blurred_dataset()
-    batches = batches if batches is not None else np.floor(len(dataset)/FLAGS.batch_size)
-    self.permutation = np.arange(len(dataset))
-    self.permutation = self.permutation if not shuffle else np.random.permutation(self.permutation)
-
-    for i in range(batches):
-      batch_indexes = self.permutation[i * FLAGS.batch_size:(i + 1) * FLAGS.batch_size]
-      # batch = np.stack((dataset[batch_indexes], dataset[batch_indexes + 1], dataset[batch_indexes + 2]), axis=1)
-      batch = dataset[batch_indexes]
-      yield batch, batch
-
   _blurred_dataset, _last_blur = None, 0
 
   def _get_blur_sigma(self):
@@ -184,10 +183,15 @@ class Autoencoder:
     self.step = tf.assign(self.step_var, self.step_var + 1)
 
     with tf.name_scope('args_transform'):
-      input = tf.cast(self.input, tf.float32) / 255.
+      net = tf.cast(self.input, tf.float32) / 255.
       target = tf.cast(self.target, tf.float32) / 255.
+      if FLAGS.new_blur:
+        net = _blur_expand(net)
+        target = _blur_expand(target)
+        FLAGS.blur = 0.
+    self.input_expand = net
 
-    model = model_interpreter.build_autoencoder(input, FLAGS.net)
+    model = model_interpreter.build_autoencoder(net, FLAGS.net)
     self.encode = model.encode
     self.decode_raw = model.decode
 
@@ -201,6 +205,8 @@ class Autoencoder:
     self.train = self.optimizer.minimize(self.loss)
 
     with tf.name_scope('to_image'):
+      if FLAGS.new_blur:
+        self.decode_raw = self.decode_raw[..., :self.batch_shape[-1]]
       self.decode = tf.nn.relu(self.decode_raw)
       self.decode = tf.cast(self.decode <= 1, self.decode.dtype) * self.decode * 255
       self.decode = tf.cast(self.decode, tf.uint8)
@@ -218,12 +224,10 @@ class Autoencoder:
         for current_epoch in range(epochs_to_train):
           start = time.time()
           for batch in self._batch_generator():
-            assert batch[0][0, 0, 0, 0] == batch[1][0, 0, 0, 0]
             encoding, reconstruction, loss, _, step = \
               sess.run(
-                [self.encode, self.decode_raw, self.loss, self.train, self.step],
+                [self.encode, self.decode, self.loss, self.train, self.step],
                 feed_dict={self.input: batch[0], self.target: batch[1]})
-            # print(np.min(reconstruction), np.max(reconstruction))
             self._on_batch_finish(loss, batch, encoding, reconstruction)
           self._on_epoch_finish(current_epoch, epochs_to_train, start, sess)
         self._on_training_finish()

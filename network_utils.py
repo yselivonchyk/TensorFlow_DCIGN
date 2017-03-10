@@ -111,6 +111,15 @@ def get_variable(checkpoint, name):
   return var
 
 
+def scope_wrapper(scope_name):
+  def scope_decorator(func):
+    def func_wrapper(*args, **kwargs):
+      with tf.name_scope(scope_name):
+        return func(*args, **kwargs)
+    return func_wrapper
+  return scope_decorator
+
+
 # Gaussian blur
 
 
@@ -126,19 +135,10 @@ def _build_gaussian_kernel(k_size, nsig, channels):
   return out_filter
 
 
-def scope_wrapper(scope_name):
-  def scope_decorator(func):
-    def func_wrapper(*args, **kwargs):
-      with tf.name_scope(scope_name):
-        return func(*args, **kwargs)
-    return func_wrapper
-  return scope_decorator
-
-
 def blur_gaussian(input, sigma, filter_size):
   num_channels = input.get_shape().as_list()[3]
   with tf.variable_scope('gaussian_filter'):
     kernel = _build_gaussian_kernel(filter_size, sigma, num_channels)
-    kernel = tf.Variable(tf.convert_to_tensor(kernel), name='gauss_weight')
+    kernel = tf.constant(kernel.flatten(), shape=kernel.shape, name='gauss_weight')
     output = tf.nn.depthwise_conv2d(input, kernel, [1, 1, 1, 1], padding='SAME')
     return output, kernel
