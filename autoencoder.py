@@ -23,14 +23,14 @@ tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'inpu
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
-tf.app.flags.DEFINE_string('model_type', 'blur', 'Type of the model to use: Autoencoder (ae)'
+tf.app.flags.DEFINE_string('model_type', 'ae', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
 tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
 
 tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
 
 tf.app.flags.DEFINE_integer('save_every', 250, 'Save model state every INT epochs')
-tf.app.flags.DEFINE_integer('save_encodings_every', 5, 'Save encoding and visualizations every')
+tf.app.flags.DEFINE_integer('save_encodings_every', 25, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_integer('visualiza_max', 10, 'Max pairs to show on visualization')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 tf.app.flags.DEFINE_boolean('dev', False, 'Indicate development mode')
@@ -39,7 +39,7 @@ tf.app.flags.DEFINE_integer('batch_size', 128, 'Batch size')
 tf.app.flags.DEFINE_float('learning_rate', 0.0001, 'Create visualization of ')
 
 tf.app.flags.DEFINE_float('blur', 5.0, 'Max sigma value for Gaussian blur applied to training set')
-tf.app.flags.DEFINE_boolean('new_blur', True, '')
+tf.app.flags.DEFINE_boolean('new_blur', False, 'Use data augmentation as blur info')
 tf.app.flags.DEFINE_integer('blur_decrease', 10000, 'Decrease image blur every X steps')
 
 FLAGS = tf.app.flags.FLAGS

@@ -257,14 +257,15 @@ def _plot_single_cross_section(data, select, subplot):
   # data = np.vstack((data, np.asarray([data[0, :]])))
   # subplot.plot(data[:, 0], data[:, 1], alpha=0.4)
 
-  subplot.set_xlabel('feature %d' % select[0])
-  subplot.set_ylabel('feature %d' % select[1])
+  subplot.set_xlabel('feature %d' % select[0], labelpad=-12)
+  subplot.set_ylabel('feature %d' % select[1], labelpad=-12)
   subplot.set_xlim([-0.05, 1.05])
   subplot.set_ylim([-0.05, 1.05])
   subplot.xaxis.set_ticks([0, 1])
   subplot.xaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
   subplot.yaxis.set_ticks([0, 1])
   subplot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
+
 
 def _plot_single_cross_section_3d(data, select, subplot):
   data = data[:, select]
@@ -281,8 +282,9 @@ def _plot_single_cross_section_3d(data, select, subplot):
   # data = np.vstack((data, np.asarray([data[0, :]])))
   # subplot.plot(data[:, 0], data[:, 1], alpha=0.4)
 
-  subplot.set_xlabel('feature %d' % select[0])
-  subplot.set_ylabel('feature %d' % select[1])
+  subplot.set_xlabel('feature %d' % select[0], labelpad=-12)
+  subplot.set_ylabel('feature %d' % select[1], labelpad=-12)
+  subplot.set_zlabel('feature %d' % select[2], labelpad=-12)
   subplot.set_xlim([-0.01, 1.01])
   subplot.set_ylim([-0.01, 1.01])
   subplot.set_zlim([-0.01, 1.01])
@@ -319,6 +321,7 @@ def visualize_cross_section_with_reco(embeddings):
       subplot = plt.subplot(size, size + 1, pos)
       _plot_single_cross_section(embeddings, [i, j], subplot)
   reco_subplot = plt.subplot(1, size + 1, size + 1)
+  reco_subplot.axis('off')
 
   if size >= 2:
     single_size = size if size < 4 else int(size/2)
