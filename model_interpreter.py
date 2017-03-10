@@ -76,13 +76,15 @@ def build_decoder(net, layer_config, i=None, reuse=False):
 
   cfg = layer_config[i]
   name = cfg.dec_op_name if reuse else None
+
+  if len(layer_config) > i + 1:
+    if len(layer_config[i + 1].shape) != len(net.get_shape().as_list()):
+      net = tf.reshape(net, layer_config[i + 1].shape)
+
   if cfg.type == FC:
     net = slim.fully_connected(net, int(np.prod(cfg.shape[1:])), scope=name,
                                activation_fn=cfg.activation, reuse=reuse)
-
   elif cfg.type == CONV:
-    if len(layer_config[i + 1].shape) != len(net.get_shape().as_list()):
-      net = tf.reshape(net, layer_config[i + 1].shape)
     net = slim.conv2d_transpose(net, cfg.shape[-1], [cfg.kernel, cfg.kernel], stride=cfg.stride,
                                 activation_fn=cfg.activation, padding=PADDING,
                                 scope=name, reuse=reuse)
@@ -224,8 +226,9 @@ def _test_armgax_ae():
 
 
 if __name__ == '__main__':
+  model = build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), 'f100-f5')
   # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '10c3-f100-f10')
   # _test_parameter_reuse_conv()
   # _test_parameter_reuse_decoder()
-  _test_armgax_ae()
+  # _test_armgax_ae()
   _log_graph()

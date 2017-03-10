@@ -367,11 +367,98 @@ def print_flags(FLAGS):
 #     return output, kernel
 
 
+def _abbreviate_string(value):
+  str_value = str(value)
+  abbr = [letter for letter in str_value if letter.isupper()]
+  if len(abbr) > 1:
+    return ''.join(abbr)
+
+  if len(str_value.split('_')) > 2:
+    parts = str_value.split('_')
+    letters = ''.join(x[0] for x in parts)
+    return letters
+  return value
+
+
+def to_file_name(obj, folder=None, ext=None, append_timestamp=False):
+  name, postfix = '', ''
+  od = collections.OrderedDict(sorted(obj.items()))
+  for _, key in enumerate(od):
+    value = obj[key]
+    if value is None:
+      value = 'na'
+    #FUNC and OBJECTS
+    if 'function' in str(value):
+      value = str(value).split()[1].split('.')[0]
+      parts = value.split('_')
+      if len(parts) > 1:
+        value = ''.join(list(map(lambda x: x.upper()[0], parts)))
+    elif ' at ' in str(value):
+      value = (str(value).split()[0]).split('.')[-1]
+      value = _abbreviate_string(value)
+    elif isinstance(value, type):
+      value = _abbreviate_string(value.__name__)
+    # FLOATS
+    if isinstance(value, float) or isinstance(value, np.float32):
+      if value < 0.0001:
+        value = '%.6f' % value
+      elif value > 1000000:
+        value = '%.0f' % value
+      else:
+        value = '%.4f' % value
+      value = value.rstrip('0')
+    #INTS
+    if isinstance(value, int):
+      value = '%02d' % value
+    #LIST
+    if isinstance(value, list):
+      value = '|'.join(map(str, value))
+
+    truncate_threshold = 20
+    value = _abbreviate_string(value)
+    if len(value) > truncate_threshold:
+      print_info('truncating this: %s %s' % (key, value))
+      value = value[0:20]
+
+    if 'suf' in key or 'postf' in key:
+      continue
+
+    name += '__%s|%s' % (key, str(value))
+
+  if 'suf' in obj:
+    prefix_value = obj['suf']
+  else:
+    prefix_value = FLAGS.suffix
+  if 'postf' in obj:
+    prefix_value += '_%s' % obj['postf']
+  name = prefix_value + name
+
+  if ext:
+    name += '.' + ext
+  if folder:
+    name = os.path.join(folder, name)
+  return name
+
+
+def configure_folders_2(FLAGS, meta):
+  folder_meta = meta.copy()
+  folder_meta.pop('init')
+  folder_meta.pop('lr')
+  folder_meta.pop('opt')
+  folder_meta.pop('bs')
+  folder_name = to_file_name(folder_meta) + '/'
+  checkpoint_folder = os.path.join(TEMP_FOLDER, folder_name)
+  log_folder = os.path.join(checkpoint_folder, 'log')
+  mkdir([TEMP_FOLDER, IMAGE_FOLDER, checkpoint_folder, log_folder])
+  FLAGS.save_path = checkpoint_folder
+  FLAGS.logdir = log_folder
+  return checkpoint_folder, log_folder
+
+
 if __name__ == '__main__':
   data = []
   for i in range(10):
       data.append((str(i), np.random.rand(1000)))
-  plot_epoch_progress({'f': 'test'}, data, True)
 
 
 mask_busy_gpus()

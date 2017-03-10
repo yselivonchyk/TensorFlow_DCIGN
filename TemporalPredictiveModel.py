@@ -109,7 +109,7 @@ class TemporalPredictiveModel(Model.Model):
     # Encoder
     self._input = tf.placeholder(tf.float32, self._batch_shape, name='input')
     img1, img2, img3 = self._input[:, 0, :], self._input[:, 1, :], self._input[:, 2, :]
-    encodings = list(map(self._encoder_conv, [img1, img2, img3]))
+    encodings = list(map(self._encoder, [img1, img2, img3]))
     encodings += [2 * encodings[1] - encodings[2], 2 * encodings[1] - encodings[0]]
     decodings = list(map(self._decoder, encodings))
 
@@ -259,7 +259,7 @@ class TemporalPredictiveModel(Model.Model):
   def train(self, epochs_to_train=5):
     meta = self.get_meta()
     ut.print_time('train started: \n%s' % ut.to_file_name(meta))
-    ut.configure_folders(FLAGS, meta)
+    ut.configure_folders_2(FLAGS, meta)
 
     self.fetch_datasets(self._activation)
     self.build_predictive_model()
@@ -269,13 +269,14 @@ class TemporalPredictiveModel(Model.Model):
       self._register_training_start(sess)
       self.restore_model(sess)
 
-      ut.print_model_info(trainable=True)
-
       # MAIN LOOP
       try:
         for current_epoch in xrange(epochs_to_train):
           start = time.time()
           for batch in self._batch_generator():
+            # print(batch[0].mean(), batch[0].std())
+            # print(batch[0].min(), batch[0].max())
+            print(FLAGS.logdir)
             encoding, reconstruction, loss, _, step = sess.run(
               [self._encode, self._decode, self._reco_loss, self._train, self._step],
               feed_dict={self._input: batch[0]})

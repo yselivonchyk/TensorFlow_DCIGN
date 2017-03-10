@@ -18,10 +18,10 @@ import model_interpreter
 from Bunch import Bunch
 
 
-tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
+tf.app.flags.DEFINE_string('input_path', '../data/tmp/romb8.3.6.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
-tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_string('net', '5c3', 'model configuration')
+tf.app.flags.DEFINE_string('test_path', '../data/tmp/romb8.3.6.tar.gz', 'test set folder')
+tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
 tf.app.flags.DEFINE_string('model_type', 'ae', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
 tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
@@ -35,10 +35,10 @@ tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 tf.app.flags.DEFINE_boolean('dev', False, 'Indicate development mode')
 
 tf.app.flags.DEFINE_integer('batch_size', 128, 'Batch size')
-tf.app.flags.DEFINE_float('learning_rate', 0.001, 'Create visualization of ')
+tf.app.flags.DEFINE_float('learning_rate', 0.0001, 'Create visualization of ')
 
-tf.app.flags.DEFINE_float('blur', 2.0, 'Max sigma value for Gaussian blur applied to training set')
-tf.app.flags.DEFINE_integer('blur_decrease', 1000, 'Decrease image blur every X steps')
+tf.app.flags.DEFINE_float('blur', 5.0, 'Max sigma value for Gaussian blur applied to training set')
+tf.app.flags.DEFINE_integer('blur_decrease', 10000, 'Decrease image blur every X steps')
 
 FLAGS = tf.app.flags.FLAGS
 slim = tf.contrib.slim
@@ -187,13 +187,21 @@ class Autoencoder:
       input = tf.cast(self.input, tf.float32) / 255.
       target = tf.cast(self.target, tf.float32) / 255.
 
-    self.encode, self.decode, _ = model_interpreter.build_autoencoder(input, FLAGS.net)
-    self.loss = model_interpreter.l2_loss(target, self.decode, name='reconstruction')
+    model = model_interpreter.build_autoencoder(input, FLAGS.net)
+    self.encode = model.encode
+    self.decode_raw = model.decode
+
+    self.model = model
+    self.encoding = tf.placeholder(self.encode.dtype, self.encode.get_shape(), name='encoding')
+    self.decode_standalone = model_interpreter.build_decoder(self.encoding, model.config, reuse=True)
+    self.loss_standalone = model_interpreter.l2_loss(target, self.decode_standalone, name='predictive_reco')
+
+    self.loss = model_interpreter.l2_loss(target, self.decode_raw, name='reconstruction')
     self.optimizer = self.optimizer_constructor(learning_rate=FLAGS.learning_rate)
     self.train = self.optimizer.minimize(self.loss)
 
     with tf.name_scope('to_image'):
-      self.decode = tf.nn.relu(self.decode)
+      self.decode = tf.nn.relu(self.decode_raw)
       self.decode = tf.cast(self.decode <= 1, self.decode.dtype) * self.decode * 255
       self.decode = tf.cast(self.decode, tf.uint8)
 
@@ -210,9 +218,10 @@ class Autoencoder:
         for current_epoch in range(epochs_to_train):
           start = time.time()
           for batch in self._batch_generator():
+            assert batch[0][0, 0, 0, 0] == batch[1][0, 0, 0, 0]
             encoding, reconstruction, loss, _, step = \
               sess.run(
-                [self.encode, self.decode, self.loss, self.train, self.step],
+                [self.encode, self.decode_raw, self.loss, self.train, self.step],
                 feed_dict={self.input: batch[0], self.target: batch[1]})
             # print(np.min(reconstruction), np.max(reconstruction))
             self._on_batch_finish(loss, batch, encoding, reconstruction)
@@ -245,9 +254,10 @@ class Autoencoder:
 
     expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
     digest.size = len(expected)
+
     for p in self._batch_permutation_generator(digest.size, shuffle=False):
-      digest.loss +=      self.loss.eval(feed_dict={self.encode.name: digest.encoded[p+2], self.target: blurred[p+2]})
-      digest.eval_loss += self.loss.eval(feed_dict={self.encode.name: expected[p],         self.target: blurred[p+2]})
+      digest.loss +=      self.loss_standalone.eval(feed_dict={self.encoding: digest.encoded[p+2], self.target: blurred[p+2], self.input: blurred[p]})
+      digest.eval_loss += self.loss_standalone.eval(feed_dict={self.encoding: expected[p],         self.target: blurred[p+2], self.input: blurred[p]})
       digest.dumb_loss += self.loss.eval(feed_dict={self.input:       blurred[p],          self.target: blurred[p+2]})
 
     for batch in self._batch_generator(blurred, batches=1):
@@ -285,9 +295,10 @@ class Autoencoder:
 
   def _on_batch_finish(self, loss, batch=None, encoding=None, reconstruction=None):
     self.epoch_stats.total_loss += loss
-    if FLAGS.dev:
+
+    if False:
       assert batch is not None and reconstruction is not None
-      original = batch[0][:, 0]
+      original = batch[0]
       vis.plot_reconstruction(original, reconstruction, interactive=True)
 
   def _on_epoch_finish(self, epoch, total_epochs, start_time, sess):
@@ -304,7 +315,7 @@ class Autoencoder:
       # Hack. Don't visualize ConvNets
       if len(self.encode.get_shape().as_list()) > 2:
         evaluation.encoded = np.random.randn(50, 2)
-
+      # print(evaluation.encoded)
       # print(evaluation.encoded.shape, evaluation.reconstructed.shape, evaluation.source.shape)
       data = {
         'enc': np.asarray(evaluation.encoded),
@@ -337,8 +348,10 @@ class Autoencoder:
     epoch_count = 'Epochs %2d/%d%s' % (current_epoch + 1, epochs, epoch_past_info)
     time_info = '%2dms/bt' % (elapsed / self.epoch_size * 1000)
 
-    info_string = ' '.join([epoch_count, accuracy_info, time_info])
+    examples = int(np.floor(len(self.train_set) / FLAGS.batch_size))
+    loss_info = 't.loss:%d' % (self.epoch_stats.total_loss * 100 / (examples * np.prod(self.batch_shape[1:])))
 
+    info_string = ' '.join([epoch_count, accuracy_info, time_info, loss_info])
     ut.print_time(info_string, same_line=True)
 
   def _on_training_finish(self):
