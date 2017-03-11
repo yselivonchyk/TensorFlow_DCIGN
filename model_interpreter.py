@@ -25,6 +25,12 @@ CONFIG_COLOR = 30
 PADDING = 'SAME'
 
 
+def clean_unpooling_masks(layer_config):
+  for cfg in layer_config:
+    if cfg.type == POOL_ARG:
+      cfg.argmax = None
+
+
 def build_autoencoder(input, layer_config):
   reuse_model = isinstance(layer_config, list)
   if not reuse_model:
@@ -33,6 +39,7 @@ def build_autoencoder(input, layer_config):
   ut.print_info('Model config:', color=CONFIG_COLOR)
   enc = build_encoder(input, layer_config, reuse=reuse_model)
   dec = build_decoder(enc, layer_config, reuse=reuse_model)
+  clean_unpooling_masks(layer_config)
   losses = build_losses(layer_config)
   return Bunch(encode=enc, decode=dec, losses=losses, config=layer_config)
 
@@ -55,6 +62,9 @@ def build_encoder(net, layer_config, i=1, reuse=False):
                       scope=name, reuse=reuse)
   elif cfg.type == POOL_ARG:
     net, cfg.argmax = nut.max_pool_with_argmax(net, cfg.kernel)
+    # if not reuse:
+    #   mask = nut.fake_arg_max_of_max_pool(cfg.shape, cfg.kernel)
+    #   cfg.argmax_dummy = tf.constant(mask.flatten(), shape=mask.shape)
   elif cfg.type == POOL:
     net = slim.max_pool2d(net, kernel_size=[cfg.kernel, cfg.kernel], stride=cfg.kernel)
   elif cfg.type == DO:
@@ -66,8 +76,7 @@ def build_encoder(net, layer_config, i=1, reuse=False):
 
   if not reuse:
     cfg.enc_op_name = net.name.split('/')[0]
-
-  ut.print_info('encoder_%d\t%s\t%s\t%s' % (i, str(cfg.shape), str(net), cfg.enc_op_name), color=CONFIG_COLOR)
+  ut.print_info('\rencoder_%d\t%s\t%s' % (i, str(net), cfg.enc_op_name), color=CONFIG_COLOR)
   return build_encoder(net, layer_config, i + 1, reuse=reuse)
 
 
@@ -89,7 +98,10 @@ def build_decoder(net, layer_config, i=None, reuse=False):
                                 activation_fn=cfg.activation, padding=PADDING,
                                 scope=name, reuse=reuse)
   elif cfg.type == POOL_ARG:
-    net = nut.unpool(net, mask=cfg.argmax, stride=cfg.kernel)
+    if cfg.argmax is not None:
+      net = nut.unpool(net, mask=cfg.argmax, stride=cfg.kernel)
+    else:
+      net = nut.upsample(net, stride=cfg.kernel)
   elif cfg.type == POOL:
     net = nut.upsample(net, cfg.kernel)
   elif cfg.type == DO:
@@ -100,7 +112,7 @@ def build_decoder(net, layer_config, i=None, reuse=False):
     return net
   if not reuse:
     cfg.dec_op_name = net.name.split('/')[0]
-  ut.print_info('decoder_%d \t%s' % (i, str(net)), color=CONFIG_COLOR)
+  ut.print_info('\rdecoder_%d \t%s' % (i, str(net)), color=CONFIG_COLOR)
   return build_decoder(net, layer_config, i - 1, reuse=reuse)
 
 
@@ -226,7 +238,7 @@ def _test_armgax_ae():
 
 
 if __name__ == '__main__':
-  model = build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), 'f100-f5')
+  model = build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3s2_16c3s2_30c3s2_16c3_f4')
   # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '10c3-f100-f10')
   # _test_parameter_reuse_conv()
   # _test_parameter_reuse_decoder()

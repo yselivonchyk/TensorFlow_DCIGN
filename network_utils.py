@@ -25,8 +25,18 @@ def max_pool_with_argmax(net, stride):
     return net, mask
 
 
+def fake_arg_max_of_max_pool(shape, stride=2):
+  assert shape[1] % stride == 0 and shape[2] % stride == 0, \
+    'Smart padding is not supported. Indexes %s are not multiple of stride:%d' % (str(shape[1:3]), stride)
+  mask = np.arange(np.prod(shape[1:]))
+  mask = mask.reshape(shape[1:])
+  mask = mask[::stride, ::stride, :]
+  mask = np.tile(mask, (shape[0], 1, 1, 1))
+  return mask
+
+
 # Thank you, @https://github.com/Pepslee
-def unpool(net, mask, stride):
+def unpool(net, mask, stride=2):
   assert mask is not None
   with tf.name_scope('UnPool2D'):
     ksize = [1, stride, stride, 1]

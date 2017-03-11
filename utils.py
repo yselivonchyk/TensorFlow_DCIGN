@@ -189,7 +189,7 @@ def reconstruct_images_epochs(epochs, original=None, save_params=None, img_shape
 
 
 def model_to_file_name(FLAGS, folder=None, ext=None):
-  name = '%s.%s__i_%s' % (FLAGS.model_type, FLAGS.net.replace('-', '_'), FLAGS.input_name)
+  name = '%s.%s__i_%s' % (FLAGS.model, FLAGS.net.replace('-', '_'), FLAGS.input_name)
   if ext:
     name += '.' + ext
   if folder:

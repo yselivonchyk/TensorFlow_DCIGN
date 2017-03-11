@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import time
 import sys
 import getch
-import model_interpreter
+import model_interpreter as interpreter
 import network_utils as nut
 from Bunch import Bunch
 
@@ -23,18 +23,20 @@ tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'inpu
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
-tf.app.flags.DEFINE_string('model_type', 'ae', 'Type of the model to use: Autoencoder (ae)'
+tf.app.flags.DEFINE_string('model', 'pred', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
-tf.app.flags.DEFINE_float('test_max', 10000, 'max numer of exampes in the test set')
+tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss wight')
+tf.app.flags.DEFINE_string('comment', '', 'comment to leave by the model')
+
+
+tf.app.flags.DEFINE_float('test_max', 10000, 'max number of examples in the test set')
 
 tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
-
 tf.app.flags.DEFINE_integer('save_every', 250, 'Save model state every INT epochs')
 tf.app.flags.DEFINE_integer('save_encodings_every', 25, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_integer('visualiza_max', 10, 'Max pairs to show on visualization')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 tf.app.flags.DEFINE_boolean('dev', False, 'Indicate development mode')
-
 tf.app.flags.DEFINE_integer('batch_size', 128, 'Batch size')
 tf.app.flags.DEFINE_float('learning_rate', 0.0001, 'Create visualization of ')
 
@@ -91,21 +93,31 @@ class Autoencoder:
   batch_shape = None
   epoch_size = None
 
-  input = None
-  target = None
+  input, target = None, None    # AE placeholders
+  encode, decode = None, None   # AE operations
+  model = None                  # interpreted model
 
-  encode = None
-  decode = None
-  reco_loss = None
+  encoding = None               # AE predictive evaluation placeholder
+  eval_decode, eval_loss = None, None   # AE evaluation
+
+  inputs, targets = None, None  # Noise/Predictive placeholders
+  raw_inputs, raw_targets = None, None  # inputs in network-friendly representation
+  models = None                 # Noise/Predictive interpreted models
+
   optimizer = None
-  train = None
+  train_ae, loss_ae = None, None      # AE objective
+  train_pred, loss_pred = None, None  # Predictive objective
+  train_dn, loss_dn = None, None      # Denoising objective
 
-  loss = None
   step = None     # operation
   step_var = None # variable
 
   def __init__(self, optimizer=tf.train.AdamOptimizer):
     self.optimizer_constructor = optimizer
+
+    if len(FLAGS.comment) > 0:
+      with open(os.path.join(FLAGS.save_path, 'note.txt'), "a") as f:
+        f.write(FLAGS.comment)
 
 
   # MISC
@@ -182,36 +194,93 @@ class Autoencoder:
     self.step_var = tf.Variable(0, trainable=False, name='global_step')
     self.step = tf.assign(self.step_var, self.step_var + 1)
 
-    with tf.name_scope('args_transform'):
-      net = tf.cast(self.input, tf.float32) / 255.
-      target = tf.cast(self.target, tf.float32) / 255.
-      if FLAGS.new_blur:
-        net = _blur_expand(net)
-        target = _blur_expand(target)
-        FLAGS.blur = 0.
-    self.input_expand = net
+    root = self._image_to_tensor(self.input)
+    target = self._image_to_tensor(self.target)
 
-    model = model_interpreter.build_autoencoder(net, FLAGS.net)
+    model = interpreter.build_autoencoder(root, FLAGS.net)
     self.encode = model.encode
-    self.decode_raw = model.decode
 
     self.model = model
     self.encoding = tf.placeholder(self.encode.dtype, self.encode.get_shape(), name='encoding')
-    self.decode_standalone = model_interpreter.build_decoder(self.encoding, model.config, reuse=True)
-    self.loss_standalone = model_interpreter.l2_loss(target, self.decode_standalone, name='predictive_reco')
+    self.eval_decode = interpreter.build_decoder(self.encoding, model.config, reuse=True)
+    self.eval_loss = interpreter.l2_loss(target, self.eval_decode, name='predictive_reconstruction')
 
-    self.loss = model_interpreter.l2_loss(target, self.decode_raw, name='reconstruction')
+    self.loss_ae = interpreter.l2_loss(target, model.decode, name='reconstruction')
     self.optimizer = self.optimizer_constructor(learning_rate=FLAGS.learning_rate)
-    self.train = self.optimizer.minimize(self.loss)
+    self.train_ae = self.optimizer.minimize(self.loss_ae)
 
+    self.decode = self._tensor_to_image(model.decode)
+
+
+  def build_predictive_model(self):
+    self.build_model()  # builds on top of AE model. Due to auxilary operations init
+    self.inputs = tf.placeholder(tf.uint8, [3] + self.batch_shape, name='inputs')
+    self.targets = tf.placeholder(tf.uint8, [3] + self.batch_shape, name='targets')
+
+    print('predictive')
+
+    self.raw_inputs = [self._image_to_tensor(self.inputs[i]) for i in range(3)]
+    self.raw_targets = [self._image_to_tensor(self.targets[i]) for i in range(3)]
+
+    # Mmmmmagic hands!
+    config = self.model.config
+    models = [interpreter.build_autoencoder(x, config) for x in self.raw_inputs]
+    reco_losses = [1./3 * interpreter.l2_loss(models[i].decode, self.raw_targets[i]) for i in range(3)]  # business as usual
+
+    predict_2 = models[1].encode*2 - models[0].encode  # predict
+    predict_0 = models[1].encode*2 - models[2].encode
+
+    # Construct graph parts for prediction
+    predict_decode_0 = interpreter.build_decoder(predict_0, config, reuse=True)
+    predict_decode_2 = interpreter.build_decoder(predict_2, config, reuse=True)
+    predict_loss_0 = 1./2 * interpreter.l2_loss(predict_decode_0, self.raw_targets[0], alpha=FLAGS.alpha)
+    predict_loss_2 = 1./2 * interpreter.l2_loss(predict_decode_2, self.raw_targets[2], alpha=FLAGS.alpha)
+    self.models = models + [predict_decode_0, predict_decode_2]
+
+    # Stitch it all together aaand train
+    self.loss_pred = tf.add_n(reco_losses + [predict_loss_0, predict_loss_2])
+    self.train_pred = self.optimizer.minimize(self.loss_pred)
+
+
+  # def build_denoising_model(self):
+  #   self.build_predictive_model()  # builds on top of predictive model. Reuses triplet encoding
+  #
+  #   config = self.model.config
+  #   models = self.models
+  #
+  #   delta_1 = tf.abs(models[1].encode - models[0].encode)
+  #   delta_2 = tf.abs(models[1].encode - models[2].encode)
+  #
+  #   # Construct graph parts for prediction
+  #   predict_decode_0 = interpreter.build_decoder(predict_0, config, reuse=True)
+  #   predict_decode_2 = interpreter.build_decoder(predict_2, config, reuse=True)
+  #   predict_loss_0 = 1. / 2 * interpreter.l2_loss(predict_decode_0, self.raw_targets[0], alpha=FLAGS.alpha)
+  #   predict_loss_2 = 1. / 2 * interpreter.l2_loss(predict_decode_2, self.raw_targets[2], alpha=FLAGS.alpha)
+  #   self.models = models + [predict_decode_0, predict_decode_2]
+  #
+  #   # Stitch it all together aaand train
+  #   self.loss_pred = tf.add_n(reco_losses + [predict_loss_0, predict_loss_2])
+  #   self.train_pred = self.optimizer.minimize(self.loss_pred)
+
+
+  def _tensor_to_image(self, net):
     with tf.name_scope('to_image'):
       if FLAGS.new_blur:
-        self.decode_raw = self.decode_raw[..., :self.batch_shape[-1]]
-      self.decode = tf.nn.relu(self.decode_raw)
-      self.decode = tf.cast(self.decode <= 1, self.decode.dtype) * self.decode * 255
-      self.decode = tf.cast(self.decode, tf.uint8)
+        net = net[..., :self.batch_shape[-1]]
+      net = tf.nn.relu(net)
+      net = tf.cast(net <= 1, net.dtype) * net * 255
+      net = tf.cast(net, tf.uint8)
+      return net
 
-  def train(self, epochs_to_train=5):
+  def _image_to_tensor(self, image):
+    with tf.name_scope('args_transform'):
+      net = tf.cast(image, tf.float32) / 255.
+      if FLAGS.new_blur:
+        net = _blur_expand(net)
+        FLAGS.blur = 0.
+    return net
+
+  def train(self):
     ut.configure_folders(FLAGS)
     self.fetch_datasets()
     self.build_model()
@@ -221,15 +290,38 @@ class Autoencoder:
       self._on_training_start(sess)
 
       try:
-        for current_epoch in range(epochs_to_train):
+        for current_epoch in range(FLAGS.max_epochs):
           start = time.time()
           for batch in self._batch_generator():
-            encoding, reconstruction, loss, _, step = \
-              sess.run(
-                [self.encode, self.decode, self.loss, self.train, self.step],
-                feed_dict={self.input: batch[0], self.target: batch[1]})
+            encoding, reconstruction, loss, _, step = sess.run(
+                [self.encode, self.decode, self.loss_ae, self.train_ae, self.step],
+                feed_dict={self.input: batch[0], self.target: batch[1]}
+            )
             self._on_batch_finish(loss, batch, encoding, reconstruction)
-          self._on_epoch_finish(current_epoch, epochs_to_train, start, sess)
+          self._on_epoch_finish(current_epoch, start, sess)
+        self._on_training_finish()
+      except KeyboardInterrupt:
+        self._on_training_abort(sess)
+
+
+  def train_predictive(self):
+    ut.configure_folders(FLAGS)
+    self.fetch_datasets()
+    self.build_predictive_model()
+
+    with tf.Session() as sess:
+      sess.run(tf.global_variables_initializer())
+      self._on_training_start(sess)
+
+      try:
+        for current_epoch in range(FLAGS.max_epochs):
+          start = time.time()
+          for batch_indexes in self._batch_permutation_generator(len(self.train_set)-2):
+            ds = self.train_set
+            batch = np.stack((ds[batch_indexes], ds[batch_indexes + 1], ds[batch_indexes + 2]))
+            loss, _, step = sess.run([self.loss_pred, self.train_pred, self.step],
+                                     feed_dict={self.inputs: batch, self.targets: batch})
+          self._on_epoch_finish(current_epoch, start, sess)
         self._on_training_finish()
       except KeyboardInterrupt:
         self._on_training_abort(sess)
@@ -260,9 +352,9 @@ class Autoencoder:
     digest.size = len(expected)
 
     for p in self._batch_permutation_generator(digest.size, shuffle=False):
-      digest.loss +=      self.loss_standalone.eval(feed_dict={self.encoding: digest.encoded[p+2], self.target: blurred[p+2], self.input: blurred[p]})
-      digest.eval_loss += self.loss_standalone.eval(feed_dict={self.encoding: expected[p],         self.target: blurred[p+2], self.input: blurred[p]})
-      digest.dumb_loss += self.loss.eval(feed_dict={self.input:       blurred[p],          self.target: blurred[p+2]})
+      digest.loss +=      self.eval_loss.eval(feed_dict={self.encoding: digest.encoded[p + 2], self.target: blurred[p + 2]})
+      digest.eval_loss += self.eval_loss.eval(feed_dict={self.encoding: expected[p], self.target: blurred[p + 2]})
+      digest.dumb_loss += self.loss_ae.eval(  feed_dict={self.input:    blurred[p], self.target: blurred[p + 2]})
 
     for batch in self._batch_generator(blurred, batches=1):
       digest.source = batch[1][:take]
@@ -305,15 +397,15 @@ class Autoencoder:
       original = batch[0]
       vis.plot_reconstruction(original, reconstruction, interactive=True)
 
-  def _on_epoch_finish(self, epoch, total_epochs, start_time, sess):
+  def _on_epoch_finish(self, epoch, start_time, sess):
     elapsed = time.time() - start_time
 
-    if is_stopping_point(epoch, total_epochs, FLAGS.save_every):
+    if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.save_every):
       self.saver.save(sess, self.get_checkpoint_path())
 
     accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
 
-    if is_stopping_point(epoch, total_epochs, FLAGS.save_encodings_every):
+    if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.save_encodings_every):
       evaluation = self.evaluate(sess, take=FLAGS.visualiza_max)
 
       # Hack. Don't visualize ConvNets
@@ -341,8 +433,8 @@ class Autoencoder:
 
 
     self.stats.epoch_accuracy.append(accuracy)
-    self._print_epoch_info(accuracy, epoch, total_epochs, elapsed)
-    if epoch + 1 != total_epochs:
+    self._print_epoch_info(accuracy, epoch, FLAGS.max_epochs, elapsed)
+    if epoch + 1 != FLAGS.max_epochs:
       self.epoch_stats = get_stats_template()
 
   def _print_epoch_info(self, accuracy, current_epoch, epochs, elapsed):
@@ -380,4 +472,9 @@ if __name__ == '__main__':
     FLAGS.blur = 0.0
 
   model = Autoencoder()
-  model.train(FLAGS.max_epochs)
+  if FLAGS.model == 'ae':
+    model.train_ae()
+  elif FLAGS.model == 'pred':
+    model.train_predictive()
+  else:
+    print('Do-di-li-doo doo-di-li-don')

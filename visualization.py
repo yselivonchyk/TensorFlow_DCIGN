@@ -130,7 +130,7 @@ def plot_encoding_crosssection(encodings, file_path, original=None, reconstructi
   # print(encodings.shape)
   # print(original.shape)
   # print(reconstruction.shape)
-  encodings = manual_pca(encodings)
+  # encodings = manual_pca(encodings)
 
   fig = _get_figure()
   if original is not None:
