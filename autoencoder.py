@@ -23,10 +23,13 @@ tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'inpu
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
-tf.app.flags.DEFINE_string('model', 'pred', 'Type of the model to use: Autoencoder (ae)'
+tf.app.flags.DEFINE_string('model', 'noise', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
-tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss wight')
-tf.app.flags.DEFINE_string('comment', '', 'comment to leave by the model')
+tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
+tf.app.flags.DEFINE_float('beta', 5, 'Reconstruction from noisy data loss weight')
+tf.app.flags.DEFINE_float('epsilon', 0.3,
+                          'Diameter of epsilon sphere comparing to distance to a neighbour. <= 0.5')
+tf.app.flags.DEFINE_string('comment', '', 'Comment to leave by the model')
 
 
 tf.app.flags.DEFINE_float('test_max', 10000, 'max number of examples in the test set')
@@ -67,6 +70,10 @@ def _fetch_dataset(path, take=None):
   return dataset
 
 
+def l2(x):
+  return tf.reshape(tf.sqrt(tf.reduce_sum(x ** 2, axis=1)), (FLAGS.batch_size, 1))
+
+
 def get_stats_template():
   return Bunch(
     batch=[],
@@ -81,9 +88,7 @@ def _blur_expand(input):
   k_size = 9
   kernels = [2, 4, 6]
   channels = [input] + [nut.blur_gaussian(input, k, k_size)[0] for k in kernels]
-  # print(channels)
   res = tf.concat(channels, axis=3)
-  # print(res)
   return res
 
 
@@ -217,51 +222,63 @@ class Autoencoder:
     self.inputs = tf.placeholder(tf.uint8, [3] + self.batch_shape, name='inputs')
     self.targets = tf.placeholder(tf.uint8, [3] + self.batch_shape, name='targets')
 
-    print('predictive')
-
+    # transform inputs
     self.raw_inputs = [self._image_to_tensor(self.inputs[i]) for i in range(3)]
     self.raw_targets = [self._image_to_tensor(self.targets[i]) for i in range(3)]
 
-    # Mmmmmagic hands!
+    # build AE objective for triplet
     config = self.model.config
     models = [interpreter.build_autoencoder(x, config) for x in self.raw_inputs]
     reco_losses = [1./3 * interpreter.l2_loss(models[i].decode, self.raw_targets[i]) for i in range(3)]  # business as usual
+    self.models = models
 
-    predict_2 = models[1].encode*2 - models[0].encode  # predict
-    predict_0 = models[1].encode*2 - models[2].encode
+    # build predictive objective
+    pred_loss_2 = self._prediction_decode(models[1].encode*2 - models[0].encode, self.raw_targets[2])
+    pred_loss_0 = self._prediction_decode(models[1].encode*2 - models[2].encode, self.raw_targets[0])
 
-    # Construct graph parts for prediction
-    predict_decode_0 = interpreter.build_decoder(predict_0, config, reuse=True)
-    predict_decode_2 = interpreter.build_decoder(predict_2, config, reuse=True)
-    predict_loss_0 = 1./2 * interpreter.l2_loss(predict_decode_0, self.raw_targets[0], alpha=FLAGS.alpha)
-    predict_loss_2 = 1./2 * interpreter.l2_loss(predict_decode_2, self.raw_targets[2], alpha=FLAGS.alpha)
-    self.models = models + [predict_decode_0, predict_decode_2]
-
-    # Stitch it all together aaand train
-    self.loss_pred = tf.add_n(reco_losses + [predict_loss_0, predict_loss_2])
+    # Stitch it all together and train
+    self.loss_pred = tf.add_n(reco_losses + [pred_loss_0, pred_loss_2])
     self.train_pred = self.optimizer.minimize(self.loss_pred)
 
+  def _prediction_decode(self, prediction, target):
+    """Predict encoding t3 by encoding t2 and t1 and expect a good reconstruction"""
+    # Construct graph part parts for prediction
+    predict_decode = interpreter.build_decoder(prediction, self.model.config, reuse=True)
+    predict_loss = 1./2 * interpreter.l2_loss(predict_decode, target, alpha=FLAGS.alpha)
+    self.models += [predict_decode]
+    return predict_loss
 
-  # def build_denoising_model(self):
-  #   self.build_predictive_model()  # builds on top of predictive model. Reuses triplet encoding
-  #
-  #   config = self.model.config
-  #   models = self.models
-  #
-  #   delta_1 = tf.abs(models[1].encode - models[0].encode)
-  #   delta_2 = tf.abs(models[1].encode - models[2].encode)
-  #
-  #   # Construct graph parts for prediction
-  #   predict_decode_0 = interpreter.build_decoder(predict_0, config, reuse=True)
-  #   predict_decode_2 = interpreter.build_decoder(predict_2, config, reuse=True)
-  #   predict_loss_0 = 1. / 2 * interpreter.l2_loss(predict_decode_0, self.raw_targets[0], alpha=FLAGS.alpha)
-  #   predict_loss_2 = 1. / 2 * interpreter.l2_loss(predict_decode_2, self.raw_targets[2], alpha=FLAGS.alpha)
-  #   self.models = models + [predict_decode_0, predict_decode_2]
-  #
-  #   # Stitch it all together aaand train
-  #   self.loss_pred = tf.add_n(reco_losses + [predict_loss_0, predict_loss_2])
-  #   self.train_pred = self.optimizer.minimize(self.loss_pred)
 
+  def build_denoising_model(self):
+    self.build_predictive_model()  # builds on top of predictive model. Reuses triplet encoding
+
+    # build denoising objective
+    models = self.models
+    loss1 = self._noisy_decode(models[1].encode, models[0].encode)
+    loss2 = self._noisy_decode(models[1].encode, models[2].encode)
+
+    self.loss_pred = self.loss_pred + loss1 + loss2
+    self.train_pred = self.optimizer.minimize(self.loss_pred)
+
+  def _noisy_decode(self, x1, x2):
+    """Distort middle encoding with [<= 1/3*dist(neigbour)] and demand good reconstruction"""
+    dist = l2(x1 - x2)
+    noise = dist * self.epsilon_sphere_noise()
+    tf.stop_gradient(noise)
+    noisy_encoding = noise + self.models[1].encode
+    # tf.stop_gradient(noisy_encoding)  # or maybe here, who knows
+    noisy_decode = interpreter.build_decoder(noisy_encoding, self.model.config, reuse=True)
+    loss = 1./2 * interpreter.l2_loss(noisy_decode, self.raw_targets[1], alpha=FLAGS.beta)
+    self.models += [noisy_decode]
+    return loss
+
+  def epsilon_sphere_noise(self):
+    mv_guassian = tf.random_normal(self.model.encode.get_shape().as_list())
+    norm = l2(mv_guassian)
+    sphere_noise = mv_guassian / norm
+    unit_noise = tf.random_uniform((FLAGS.batch_size, 1), maxval=1)
+    ball_noise = sphere_noise * unit_noise
+    return ball_noise * FLAGS.epsilon
 
   def _tensor_to_image(self, net):
     with tf.name_scope('to_image'):
@@ -325,6 +342,30 @@ class Autoencoder:
         self._on_training_finish()
       except KeyboardInterrupt:
         self._on_training_abort(sess)
+
+
+  def train_denoising(self):
+    ut.configure_folders(FLAGS)
+    self.fetch_datasets()
+    self.build_denoising_model()
+
+    with tf.Session() as sess:
+      sess.run(tf.global_variables_initializer())
+      self._on_training_start(sess)
+
+      try:
+        for current_epoch in range(FLAGS.max_epochs):
+          start = time.time()
+          for batch_indexes in self._batch_permutation_generator(len(self.train_set)-2):
+            ds = self.train_set
+            batch = np.stack((ds[batch_indexes], ds[batch_indexes + 1], ds[batch_indexes + 2]))
+            loss, _, step = sess.run([self.loss_pred, self.train_pred, self.step],
+                                     feed_dict={self.inputs: batch, self.targets: batch})
+          self._on_epoch_finish(current_epoch, start, sess)
+        self._on_training_finish()
+      except KeyboardInterrupt:
+        self._on_training_abort(sess)
+
 
 
   def naive_evaluate(self, sess, take):
@@ -474,7 +515,9 @@ if __name__ == '__main__':
   model = Autoencoder()
   if FLAGS.model == 'ae':
     model.train_ae()
-  elif FLAGS.model == 'pred':
+  elif 'pred' in FLAGS.model:
     model.train_predictive()
+  elif 'noi' in FLAGS.model:
+    model.train_denoising()
   else:
     print('Do-di-li-doo doo-di-li-don')
