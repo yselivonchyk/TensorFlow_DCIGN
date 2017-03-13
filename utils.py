@@ -211,6 +211,11 @@ def configure_folders(FLAGS):
   FLAGS.logdir = os.path.join(FLAGS.save_path, 'log')
   mkdir([TEMP_FOLDER, IMAGE_FOLDER, FLAGS.save_path, FLAGS.logdir])
 
+  with open(os.path.join(FLAGS.save_path, 'note.txt'), "a") as f:
+    f.write(str(sys.argv))
+    if len(FLAGS.comment) > 0:
+      f.write(FLAGS.comment)
+
 
 def get_latest_file(folder="./visualizations/", filter=None):
   latest_file, latest_mod_time = None, None

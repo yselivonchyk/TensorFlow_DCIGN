@@ -16,13 +16,14 @@ import sys
 import getch
 import model_interpreter as interpreter
 import network_utils as nut
+import math
 from Bunch import Bunch
 
 
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
+tf.app.flags.DEFINE_string('net', 'f19-f4', 'model configuration')
 tf.app.flags.DEFINE_string('model', 'noise', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
 tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
@@ -36,7 +37,7 @@ tf.app.flags.DEFINE_float('test_max', 10000, 'max number of examples in the test
 
 tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
 tf.app.flags.DEFINE_integer('save_every', 250, 'Save model state every INT epochs')
-tf.app.flags.DEFINE_integer('save_encodings_every', 25, 'Save encoding and visualizations every')
+tf.app.flags.DEFINE_integer('eval_every', 25, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_integer('visualiza_max', 10, 'Max pairs to show on visualization')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
 tf.app.flags.DEFINE_boolean('dev', False, 'Indicate development mode')
@@ -84,6 +85,10 @@ def get_stats_template():
     start=time.time())
 
 
+def guard_nan(x):
+  return x if not math.isnan(x) else -1.
+
+
 def _blur_expand(input):
   k_size = 9
   kernels = [2, 4, 6]
@@ -117,12 +122,10 @@ class Autoencoder:
   step = None     # operation
   step_var = None # variable
 
+
   def __init__(self, optimizer=tf.train.AdamOptimizer):
     self.optimizer_constructor = optimizer
-
-    if len(FLAGS.comment) > 0:
-      with open(os.path.join(FLAGS.save_path, 'note.txt'), "a") as f:
-        f.write(FLAGS.comment)
+    ut.configure_folders(FLAGS)
 
 
   # MISC
@@ -179,10 +182,12 @@ class Autoencoder:
     calculated_sigma = FLAGS.blur - int(10 * self.step_var.eval() / FLAGS.blur_decrease) / 10.0
     return max(0, calculated_sigma)
 
+  # @ut.timeit
   def _get_blurred_dataset(self):
     if FLAGS.blur != 0:
       current_sigma = self._get_blur_sigma()
       if current_sigma != self._last_blur:
+        # print(self._last_blur, current_sigma)
         self._last_blur = current_sigma
         self._blurred_dataset = inp.apply_gaussian(self.train_set, sigma=current_sigma)
       return self._blurred_dataset if self._blurred_dataset is not None else self.train_set
@@ -192,7 +197,7 @@ class Autoencoder:
   # TRAIN
 
 
-  def build_model(self):
+  def build_ae_model(self):
     self.input = tf.placeholder(tf.uint8, self.batch_shape, name='input')
     self.target = tf.placeholder(tf.uint8, self.batch_shape, name='target')
 
@@ -218,7 +223,7 @@ class Autoencoder:
 
 
   def build_predictive_model(self):
-    self.build_model()  # builds on top of AE model. Due to auxilary operations init
+    self.build_ae_model()  # builds on top of AE model. Due to auxilary operations init
     self.inputs = tf.placeholder(tf.uint8, [3] + self.batch_shape, name='inputs')
     self.targets = tf.placeholder(tf.uint8, [3] + self.batch_shape, name='targets')
 
@@ -269,6 +274,7 @@ class Autoencoder:
     # tf.stop_gradient(noisy_encoding)  # or maybe here, who knows
     noisy_decode = interpreter.build_decoder(noisy_encoding, self.model.config, reuse=True)
     loss = 1./2 * interpreter.l2_loss(noisy_decode, self.raw_targets[1], alpha=FLAGS.beta)
+    loss = tf.clip_by_norm(loss, clip_norm=10000)
     self.models += [noisy_decode]
     return loss
 
@@ -298,9 +304,8 @@ class Autoencoder:
     return net
 
   def train(self):
-    ut.configure_folders(FLAGS)
     self.fetch_datasets()
-    self.build_model()
+    self.build_ae_model()
 
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
@@ -322,9 +327,13 @@ class Autoencoder:
 
 
   def train_predictive(self):
-    ut.configure_folders(FLAGS)
     self.fetch_datasets()
-    self.build_predictive_model()
+    if 'noi' in FLAGS.model:
+      print('DENOISING')
+      self.build_denoising_model()
+    else:
+      print('PREDICTIVE')
+      self.build_predictive_model()
 
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
@@ -333,40 +342,16 @@ class Autoencoder:
       try:
         for current_epoch in range(FLAGS.max_epochs):
           start = time.time()
-          for batch_indexes in self._batch_permutation_generator(len(self.train_set)-2):
-            ds = self.train_set
+          ds = self._get_blurred_dataset()
+          for batch_indexes in self._batch_permutation_generator(len(ds)-2):
             batch = np.stack((ds[batch_indexes], ds[batch_indexes + 1], ds[batch_indexes + 2]))
             loss, _, step = sess.run([self.loss_pred, self.train_pred, self.step],
                                      feed_dict={self.inputs: batch, self.targets: batch})
+            self._on_batch_finish(loss)
           self._on_epoch_finish(current_epoch, start, sess)
         self._on_training_finish()
       except KeyboardInterrupt:
         self._on_training_abort(sess)
-
-
-  def train_denoising(self):
-    ut.configure_folders(FLAGS)
-    self.fetch_datasets()
-    self.build_denoising_model()
-
-    with tf.Session() as sess:
-      sess.run(tf.global_variables_initializer())
-      self._on_training_start(sess)
-
-      try:
-        for current_epoch in range(FLAGS.max_epochs):
-          start = time.time()
-          for batch_indexes in self._batch_permutation_generator(len(self.train_set)-2):
-            ds = self.train_set
-            batch = np.stack((ds[batch_indexes], ds[batch_indexes + 1], ds[batch_indexes + 2]))
-            loss, _, step = sess.run([self.loss_pred, self.train_pred, self.step],
-                                     feed_dict={self.inputs: batch, self.targets: batch})
-          self._on_epoch_finish(current_epoch, start, sess)
-        self._on_training_finish()
-      except KeyboardInterrupt:
-        self._on_training_abort(sess)
-
-
 
   def naive_evaluate(self, sess, take):
     digest = Bunch(encoded=None, reconstructed=None, source=None)
@@ -400,6 +385,11 @@ class Autoencoder:
     for batch in self._batch_generator(blurred, batches=1):
       digest.source = batch[1][:take]
       digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
+
+    digest.dumb_loss = guard_nan(digest.dumb_loss)
+    digest.eval_loss = guard_nan(digest.eval_loss)
+    digest.loss = guard_nan(digest.loss)
+
     return digest
 
 
@@ -445,15 +435,15 @@ class Autoencoder:
       self.saver.save(sess, self.get_checkpoint_path())
 
     accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
+    self.epoch_stats.total_loss = guard_nan(self.epoch_stats.total_loss)
+    accuracy = guard_nan(accuracy)
 
-    if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.save_encodings_every):
+    if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.eval_every):
       evaluation = self.evaluate(sess, take=FLAGS.visualiza_max)
 
       # Hack. Don't visualize ConvNets
       if len(self.encode.get_shape().as_list()) > 2:
         evaluation.encoded = np.random.randn(50, 2)
-      # print(evaluation.encoded)
-      # print(evaluation.encoded.shape, evaluation.reconstructed.shape, evaluation.source.shape)
       data = {
         'enc': np.asarray(evaluation.encoded),
         'rec': np.asarray(evaluation.reconstructed),
@@ -497,7 +487,7 @@ class Autoencoder:
     self.summary_writer.close()
 
   def _on_training_abort(self, sess):
-    print('Press ENTER to save model')
+    print('Press ENTER to save the model')
     if getch.getch() == '\n':
       print('saving')
       self.saver.save(sess, self.get_checkpoint_path())
@@ -509,15 +499,13 @@ if __name__ == '__main__':
   FLAGS.input_name = inp.get_input_name(FLAGS.input_path)
   if len(args) <= 1:
     FLAGS.max_epochs = 50
-    FLAGS.save_encodings_every = 1
+    FLAGS.eval_every = 1
     FLAGS.blur = 0.0
 
   model = Autoencoder()
   if FLAGS.model == 'ae':
-    model.train_ae()
-  elif 'pred' in FLAGS.model:
+    model.train()
+  elif 'pred' in FLAGS.model or 'noi' in FLAGS.model:
     model.train_predictive()
-  elif 'noi' in FLAGS.model:
-    model.train_denoising()
   else:
     print('Do-di-li-doo doo-di-li-don')
