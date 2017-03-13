@@ -130,7 +130,7 @@ def get_activation(descriptor):
   if 'c' not in descriptor and 'f' not in descriptor:
     return None
   activation = tf.nn.relu if 'c' in descriptor else tf.nn.sigmoid
-  act_descriptor = re.search('[r|s|i|t]^', descriptor)
+  act_descriptor = re.search('[r|s|i|t]&', descriptor)
   if act_descriptor is None:
     return activation
   act_descriptor = act_descriptor.group(0)
@@ -143,6 +143,15 @@ def _get_cfg_dummy():
 
 def parse(descriptor):
   item = _get_cfg_dummy()
+
+  match = re.match(r'^((\d+c\d+(s\d+)?[r|s|i|t]?)'
+                   r'|(f\d+[r|s|i|t]?)'
+                   r'|(d0?\.?[\d+]?)'
+                   r'|(d0?\.?[\d+]?)'
+                   r'|(p\d+)'
+                   r'|(ap\d+))$', descriptor)
+  assert match is not None, 'Check your writing: %s (f10i-3c64r-d0.1-p2-ap2)' % descriptor
+
 
   if 'f' in descriptor:
     item.type = FC
@@ -238,7 +247,8 @@ def _test_armgax_ae():
 
 
 if __name__ == '__main__':
-  model = build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3s2_16c3s2_30c3s2_16c3_f4')
+  # print(re.match('\d+c\d+(s\d+)?[r|s|i|t]?', '8c3s2'))
+  model = build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3s2-16c3s2-30c3s2-16c3-f4')
   # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '10c3-f100-f10')
   # _test_parameter_reuse_conv()
   # _test_parameter_reuse_decoder()
