@@ -23,12 +23,12 @@ from Bunch import Bunch
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_string('net', 'f19-f4', 'model configuration')
-tf.app.flags.DEFINE_string('model', 'noise', 'Type of the model to use: Autoencoder (ae)'
+tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
+tf.app.flags.DEFINE_string('model', 'ae', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
 tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
 tf.app.flags.DEFINE_float('beta', 5, 'Reconstruction from noisy data loss weight')
-tf.app.flags.DEFINE_float('epsilon', 0.3,
+tf.app.flags.DEFINE_float('epsilon', 0.05,
                           'Diameter of epsilon sphere comparing to distance to a neighbour. <= 0.5')
 tf.app.flags.DEFINE_string('comment', '', 'Comment to leave by the model')
 
@@ -125,8 +125,9 @@ class Autoencoder:
 
   def __init__(self, optimizer=tf.train.AdamOptimizer):
     self.optimizer_constructor = optimizer
+    FLAGS.input_name = inp.get_input_name(FLAGS.input_path)
     ut.configure_folders(FLAGS)
-
+    ut.print_flags(FLAGS)
 
   # MISC
 
@@ -170,10 +171,12 @@ class Autoencoder:
       # batch = np.stack((dataset[batch_indexes], dataset[batch_indexes + 1], dataset[batch_indexes + 2]), axis=1)
       yield x[batch_indexes], y[batch_indexes]
 
-  def _batch_permutation_generator(self, length, start=0, shuffle=True):
+  def _batch_permutation_generator(self, length, start=0, shuffle=True, batches=None):
     self.permutation = np.arange(length) + start
     self.permutation = self.permutation if not shuffle else np.random.permutation(self.permutation)
     for i in range(int(length/FLAGS.batch_size)):
+      if batches is not None and i >= batches:
+        break
       yield self.permutation[i * FLAGS.batch_size:(i + 1) * FLAGS.batch_size]
 
   _blurred_dataset, _last_blur = None, 0
@@ -212,8 +215,10 @@ class Autoencoder:
 
     self.model = model
     self.encoding = tf.placeholder(self.encode.dtype, self.encode.get_shape(), name='encoding')
-    self.eval_decode = interpreter.build_decoder(self.encoding, model.config, reuse=True)
-    self.eval_loss = interpreter.l2_loss(target, self.eval_decode, name='predictive_reconstruction')
+    eval_decode = interpreter.build_decoder(self.encoding, model.config, reuse=True)
+    self.eval_loss = interpreter.l2_loss(target, eval_decode, name='predictive_reconstruction')
+    self.eval_decode = self._tensor_to_image(eval_decode)
+
 
     self.loss_ae = interpreter.l2_loss(target, model.decode, name='reconstruction')
     self.optimizer = self.optimizer_constructor(learning_rate=FLAGS.learning_rate)
@@ -347,23 +352,24 @@ class Autoencoder:
             batch = np.stack((ds[batch_indexes], ds[batch_indexes + 1], ds[batch_indexes + 2]))
             loss, _, step = sess.run([self.loss_pred, self.train_pred, self.step],
                                      feed_dict={self.inputs: batch, self.targets: batch})
+            # print(np.concatenate((d, n), axis=1))
             self._on_batch_finish(loss)
           self._on_epoch_finish(current_epoch, start, sess)
         self._on_training_finish()
       except KeyboardInterrupt:
         self._on_training_abort(sess)
 
-  def naive_evaluate(self, sess, take):
-    digest = Bunch(encoded=None, reconstructed=None, source=None)
-    blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
-    for batch in self._batch_generator(blurred, shuffle=False):
-      encoding = self.encode.eval(feed_dict={self.input: batch[0]})
-      digest.encoded = ut.concatenate(digest.encoded, encoding)
-
-    for batch in self._batch_generator(blurred, batches=1):
-      digest.source = batch[1][:take]
-      digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
-    return digest
+  # def naive_evaluate(self, sess, take):
+  #   digest = Bunch(encoded=None, reconstructed=None, source=None)
+  #   blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
+  #   for batch in self._batch_generator(blurred, shuffle=False):
+  #     encoding = self.encode.eval(feed_dict={self.input: batch[0]})
+  #     digest.encoded = ut.concatenate(digest.encoded, encoding)
+  #
+  #   for batch in self._batch_generator(blurred, batches=1):
+  #     digest.source = batch[1][:take]
+  #     digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
+  #   return digest
 
 
   def evaluate(self, sess, take):
@@ -375,6 +381,7 @@ class Autoencoder:
       digest.encoded = ut.concatenate(digest.encoded, encoding)
 
     expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
+    average = 0.5 * (digest.encoded[1:-1] + digest.encoded[:-2])
     digest.size = len(expected)
 
     for p in self._batch_permutation_generator(digest.size, shuffle=False):
@@ -382,9 +389,13 @@ class Autoencoder:
       digest.eval_loss += self.eval_loss.eval(feed_dict={self.encoding: expected[p], self.target: blurred[p + 2]})
       digest.dumb_loss += self.loss_ae.eval(  feed_dict={self.input:    blurred[p], self.target: blurred[p + 2]})
 
-    for batch in self._batch_generator(blurred, batches=1):
-      digest.source = batch[1][:take]
-      digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
+    # for batch in self._batch_generator(blurred, batches=1):
+    #   digest.source = batch[1][:take]
+    #   digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
+
+    for p in self._batch_permutation_generator(digest.size, shuffle=True, batches=1):
+      digest.source = self.eval_decode.eval(feed_dict={self.encoding: expected[p]})[:take]
+      digest.reconstructed = self.eval_decode.eval(feed_dict={self.encoding: average[p]})[:take]
 
     digest.dumb_loss = guard_nan(digest.dumb_loss)
     digest.eval_loss = guard_nan(digest.eval_loss)
@@ -494,10 +505,11 @@ class Autoencoder:
 
 
 if __name__ == '__main__':
-  ut.print_flags(FLAGS)
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
-  FLAGS.input_name = inp.get_input_name(FLAGS.input_path)
   if len(args) <= 1:
+    FLAGS.input_path = '../data/tmp/romb8.5.6.tar.gz'
+    FLAGS.test_path = '../data/tmp/romb8.5.6.tar.gz'
+    FLAGS.test_max = 2178
     FLAGS.max_epochs = 50
     FLAGS.eval_every = 1
     FLAGS.blur = 0.0

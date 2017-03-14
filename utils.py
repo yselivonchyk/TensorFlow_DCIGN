@@ -212,7 +212,7 @@ def configure_folders(FLAGS):
   mkdir([TEMP_FOLDER, IMAGE_FOLDER, FLAGS.save_path, FLAGS.logdir])
 
   with open(os.path.join(FLAGS.save_path, 'note.txt'), "a") as f:
-    f.write(str(sys.argv))
+    f.write(print_flags(FLAGS, print=False))
     if len(FLAGS.comment) > 0:
       f.write(FLAGS.comment)
 
@@ -344,32 +344,15 @@ def parse_params():
   return params
 
 
-def print_flags(FLAGS):
+def print_flags(FLAGS, print=True):
   x = FLAGS.input_path
-  res = str(FLAGS.__dict__['__flags'])
-  res = res.replace(', ', '\n')
-  print_info(res)
-
-
-# def _build_gaussian_kernel(k_size, nsig, channels):
-#   interval = (2 * nsig + 1.) / k_size
-#   x = np.linspace(-nsig - interval / 2., nsig + interval / 2., k_size + 1)
-#   kern1d = np.diff(st.norm.cdf(x))
-#   kernel_raw = np.sqrt(np.outer(kern1d, kern1d))
-#   kernel = kernel_raw / kernel_raw.sum()
-#   out_filter = np.array(kernel, dtype=np.float32)
-#   out_filter = out_filter.reshape((k_size, k_size, 1, 1))
-#   out_filter = np.repeat(out_filter, channels, axis=2)
-#   return out_filter
-#
-#
-# def blur_gaussian(input, sigma, filter_size):
-#   num_channels = input.get_shape().as_list()[3]
-#   with tf.variable_scope('gaussian_filter'):
-#     kernel = _build_gaussian_kernel(filter_size, sigma, num_channels)
-#     kernel = tf.Variable(tf.convert_to_tensor(kernel), name='gauss_weight')
-#     output = tf.nn.depthwise_conv2d(input, kernel, [1, 1, 1, 1], padding='SAME')
-#     return output, kernel
+  res = 'FLAGS:'
+  for i in sorted(FLAGS.__dict__['__flags'].items()):
+    item = str(i)[2:-1].split('\', ')
+    res += '\n%20s \t%s' % (item[0] + ':', item[1])
+  if print:
+    print_info(res)
+  return res
 
 
 def _abbreviate_string(value):
@@ -443,6 +426,10 @@ def to_file_name(obj, folder=None, ext=None, append_timestamp=False):
   if folder:
     name = os.path.join(folder, name)
   return name
+
+
+def dict_to_ordereddict(dict):
+  return collections.OrderedDict(sorted(dict.items()))
 
 
 def configure_folders_2(FLAGS, meta):

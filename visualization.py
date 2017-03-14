@@ -166,7 +166,9 @@ def stitch_side_by_side(original, reconstruction, proportion=1):
   Stitch 2 lists of images together for convenient display in a single
   rectangular shape of given side proportion
   """
-  assert np.max(original) >= 10, "some strange input to of the original pictures"
+  # print(np.max(original), original.dtype)
+  if not np.max(original) >= 10:
+    print("some strange input to of the original pictures", np.max(original), original.dtype)
   column_picture, height = _stitch_images(original, reconstruction)
   picture = _reshape_column_image(column_picture, height, proportion=proportion)
   if picture.shape[-1] == 1:
@@ -476,10 +478,21 @@ def _duplicate_array(array, repeats=None, total_length=None):
   return res if total_length is None else res[:total_length]
 
 
+def _duplicate_array_repeat(array, repeats=None, total_length=None):
+  assert repeats is not None or total_length is not None
+
+  if repeats is None:
+    repeats = int(np.ceil(total_length / len(array)))
+  parts = [array for i in range(repeats)]
+  whole = np.stack(parts, axis=1)
+  whole = whole.reshape(np.prod(whole.shape))
+  return whole if total_length is None else whole[:total_length]
+
+
 def _build_radial_colors(length):
   colors = np.arange(0, 180)
   colors = np.concatenate((colors, colors[::-1]))
-  colors = _duplicate_array(colors, total_length=length)
+  colors = _duplicate_array_repeat(colors, total_length=length)
   return colors
 
 
