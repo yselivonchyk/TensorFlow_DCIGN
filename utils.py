@@ -158,6 +158,19 @@ def images_to_uint8(func):
   return func_wrapper
 
 
+def fig2buf(fig):
+  fig.canvas.draw()
+  return fig.canvas.tostring_rgb()
+
+
+def fig2rgb_array(fig, expand=True):
+  fig.canvas.draw()
+  buf = fig.canvas.tostring_rgb()
+  ncols, nrows = fig.canvas.get_width_height()
+  shape = (nrows, ncols, 3) if not expand else (1, nrows, ncols, 3)
+  return np.fromstring(buf, dtype=np.uint8).reshape(shape)
+
+
 @images_to_uint8
 def reconstruct_images_epochs(epochs, original=None, save_params=None, img_shape=None):
   full_picture = None

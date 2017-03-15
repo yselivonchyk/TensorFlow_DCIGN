@@ -17,6 +17,7 @@ import getch
 import model_interpreter as interpreter
 import network_utils as nut
 import math
+from tensorflow.contrib.tensorboard.plugins import projector
 from Bunch import Bunch
 
 
@@ -55,6 +56,8 @@ slim = tf.contrib.slim
 AUTOENCODER = 'ae'
 PREDICTIVE = 'pred'
 DENOISING = 'noise'
+
+CHECKPOINT_NAME = '-9999.chpt'
 
 
 def is_stopping_point(current_epoch, epochs_to_train, stop_every=None, stop_x_times=None,
@@ -142,7 +145,7 @@ class Autoencoder:
 
   @staticmethod
   def get_checkpoint_path():
-    return os.path.join(FLAGS.save_path, '-9999.chpt')
+    return os.path.join(FLAGS.save_path, CHECKPOINT_NAME)
 
   def get_image_shape(self):
     return self.batch_shape[2:]
@@ -225,6 +228,15 @@ class Autoencoder:
     self.loss_ae = interpreter.l2_loss(target, model.decode, name='reconstruction')
     self.decode = self._tensor_to_image(model.decode)
     self.losses = [self.loss_ae]
+
+    with tf.name_scope('decodings'):
+      self.image_summaries = {
+        'orig': self._add_decoding_summary('0_original_input', self.input),
+        'reco': self._add_decoding_summary('1_reconstruction', self.eval_decode),
+        'pred': self._add_decoding_summary('2_prediction', self.eval_decode),
+        'midd': self._add_decoding_summary('3_averaged', self.eval_decode),
+        'nois': self._add_decoding_summary('4_noisy', self.eval_decode)
+      }
 
 
   def build_predictive_model(self):
@@ -319,6 +331,8 @@ class Autoencoder:
 
 
 # MAIN
+
+
   def train(self):
     self.fetch_datasets()
     if FLAGS.model == AUTOENCODER:
@@ -341,11 +355,11 @@ class Autoencoder:
 
             # Autoencoder Training
             for batch in self._batch_generator():
-              encoding, reconstruction, loss, _, step = sess.run(
-                [self.encode, self.decode, self.loss_ae, self.train_ae, self.step],
+              summs, encoding, reconstruction, loss, _, step = sess.run(
+                [self.summs_train, self.encode, self.decode, self.loss_ae, self.train_ae, self.step],
                 feed_dict={self.input: batch[0], self.target: batch[1]}
               )
-              self._on_batch_finish(loss, batch, encoding, reconstruction)
+              self._on_batch_finish(summs, loss, batch, encoding, reconstruction)
 
           else:
 
@@ -371,12 +385,15 @@ class Autoencoder:
       encoding = self.encode.eval(feed_dict={self.input: batch[0]})
       digest.encoded = ut.concatenate(digest.encoded, encoding)
 
+    embedding = np.zeros(self.embedding_test.get_shape().as_list())
+    self.embedding_assign.eval(feed_dict={self.embedding_test_ph: embedding})
+
     expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
     average = 0.5 * (digest.encoded[1:-1] + digest.encoded[:-2])
     digest.size = len(expected)
 
     for p in self._batch_permutation_generator(digest.size, shuffle=False):
-      digest.loss +=      self.eval_loss.eval(feed_dict={self.encoding: digest.encoded[p + 2], self.target: blurred[p + 2]})
+      digest.loss      += self.eval_loss.eval(feed_dict={self.encoding: digest.encoded[p + 2], self.target: blurred[p + 2]})
       digest.eval_loss += self.eval_loss.eval(feed_dict={self.encoding: expected[p], self.target: blurred[p + 2]})
       digest.dumb_loss += self.loss_ae.eval(  feed_dict={self.input:    blurred[p], self.target: blurred[p + 2]})
 
@@ -387,27 +404,54 @@ class Autoencoder:
     for p in self._batch_permutation_generator(digest.size, shuffle=True, batches=1):
       digest.source = self.eval_decode.eval(feed_dict={self.encoding: expected[p]})[:take]
       digest.reconstructed = self.eval_decode.eval(feed_dict={self.encoding: average[p]})[:take]
+      self._eval_image_summaries(blurred[p], digest.encoded[p], average[p],  expected[p])
 
     digest.dumb_loss = guard_nan(digest.dumb_loss)
     digest.eval_loss = guard_nan(digest.eval_loss)
     digest.loss = guard_nan(digest.loss)
-
     return digest
+
+  def _eval_image_summaries(self, blurred_batch, actual, average, expected):
+    """Create Tensorboard summaries with image reconstructions"""
+    summary = self.image_summaries['orig'].eval(feed_dict={self.input: blurred_batch})
+    self.summary_writer.add_summary(summary, global_step=self.get_past_epochs())
+    self._eval_image_summary('midd', average)
+    # self._eval_image_summary('reco', actual)
+    self._eval_image_summary('pred', expected)
+    noisy = expected + np.random.randn(*expected.shape) * FLAGS.epsilon
+    self._eval_image_summary('nois', noisy)
+
+  def _eval_image_summary(self, name, encdoding_batch):
+    summary = self.image_summaries[name].eval(feed_dict={self.encoding: encdoding_batch})
+    self.summary_writer.add_summary(summary, global_step=self.get_past_epochs())
+
+  def _add_decoding_summary(self, name, var, collection='train'):
+    var = var[:FLAGS.visualiza_max]
+    var = tf.concat(tf.unstack(var), axis=0)
+    var = tf.expand_dims(var, dim=0)
+    color_s = tf.summary.image(name, var[..., :3], max_outputs=FLAGS.visualiza_max)
+    var = tf.expand_dims(var[..., 3], dim=3)
+    bw_s = tf.summary.image('depth_' + name, var, max_outputs=FLAGS.visualiza_max)
+    return tf.summary.merge([color_s, bw_s])
 
 
 # TRAINING PROGRESS EVENTS
 
 
   def _on_training_start(self, sess):
+    # Loss summaries
     with tf.name_scope('losses'):
       loss_names = ['loss_autoencoder', 'loss_predictive', 'loss_denoising']
       for i, loss in enumerate(self.losses):
-        self._add_summary(loss_names[i], loss)
-      self._add_summary('loss_total', self.loss_total)
+        self._add_loss_summary(loss_names[i], loss)
+      self._add_loss_summary('loss_total', self.loss_total)
+    self.summs_train = tf.summary.merge_all('train')
 
+
+    # Writers and savers
     self.summary_writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
     self.saver = tf.train.Saver()
-
+    self._build_embedding_saver(sess)
     self._restore_model(sess)
 
     self.epoch_stats = get_stats_template()
@@ -416,19 +460,33 @@ class Autoencoder:
       epoch_reconstructions=[],
       permutation=None
     )
+    # if FLAGS.dev:
+    #   plt.ion()
+    #   plt.show()
 
-    if FLAGS.dev:
-      plt.ion()
-      plt.show()
 
-    self.summs_train = tf.summary.merge_all('train')
+  def _build_embedding_saver(self, sess):
+    embedding_shape = [int(len(self.test_set) / FLAGS.batch_size) * FLAGS.batch_size,
+                       self.encode.get_shape().as_list()[1]]
+    self.embedding_test_ph = tf.placeholder(tf.float32, embedding_shape, name='embedding')
+    self.embedding_test = tf.Variable(tf.random_normal(embedding_shape), name='test_embedding', trainable=False)
+    self.embedding_assign = self.embedding_test.assign(self.embedding_test_ph)
+    self.embedding_saver = tf.train.Saver(var_list=[self.embedding_test])
 
-  def _add_summary(self, name, var, collection='train'):
+    config = projector.ProjectorConfig()
+    embedding = config.embeddings.add()
+    embedding.tensor_name = self.embedding_test.name
+    # embedding.metadata_path = os.path.join(LOG_DIR, 'metadata.tsv')
+    projector.visualize_embeddings(self.summary_writer, config)
+    sess.run(tf.variables_initializer([self.embedding_test], name='init_embeddings'))
+
+
+  def _add_loss_summary(self, name, var, collection='train'):
     tf.summary.scalar(name, var, [collection])
     tf.summary.scalar('log_' + name, tf.log(var), [collection])
 
   def _restore_model(self, session):
-    latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10])
+    latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10], latest_filename='checkpoint')
     ut.print_info("latest checkpoint: %s" % latest_checkpoint)
     if FLAGS.load_state and latest_checkpoint is not None:
       self.saver.restore(session, latest_checkpoint)
@@ -447,6 +505,7 @@ class Autoencoder:
     elapsed = time.time() - start_time
 
     if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.save_every):
+      self.embedding_saver.save(sess, self.get_checkpoint_path() + '_emb')
       self.saver.save(sess, self.get_checkpoint_path())
 
     accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
@@ -470,18 +529,31 @@ class Autoencoder:
                                      evaluation.dumb_loss/evaluation.size)
       meta = Bunch(suf='encodings', e='%06d' % int(self.get_past_epochs()), er=error_info)
       np.save(meta.to_file_name(folder=FLAGS.save_path), data)
-      vis.plot_encoding_crosssection(
+      fig = vis.plot_encoding_crosssection(
         evaluation.encoded,
         meta.to_file_name(FLAGS.save_path, 'jpg'),
         evaluation.source,
         evaluation.reconstructed,
         interactive=FLAGS.dev)
 
+      self._save_visualization_to_summary()
+
 
     self.stats.epoch_accuracy.append(accuracy)
     self._print_epoch_info(accuracy, epoch, FLAGS.max_epochs, elapsed)
     if epoch + 1 != FLAGS.max_epochs:
       self.epoch_stats = get_stats_template()
+
+  vis_summary = None
+  vis_placeholder = None
+
+  def _save_visualization_to_summary(self):
+    image = ut.fig2rgb_array(plt.figure(num=0))
+
+    if self.vis_summary is None:
+      self.vis_placeholder = tf.placeholder(tf.uint8, image.shape)
+      self.vis_summary = tf.summary.image('visualization', self.vis_placeholder)
+    self.summary_writer.add_summary(self.vis_summary.eval(feed_dict={self.vis_placeholder: image}))
 
   def _print_epoch_info(self, accuracy, current_epoch, epochs, elapsed):
     epochs_past = self.get_past_epochs() - current_epoch
@@ -514,8 +586,9 @@ if __name__ == '__main__':
     # FLAGS.input_path = '../data/tmp/romb8.5.6.tar.gz'
     # FLAGS.test_path = '../data/tmp/romb8.5.6.tar.gz'
     # FLAGS.test_max = 2178
-    FLAGS.max_epochs = 50
+    FLAGS.max_epochs = 5
     FLAGS.eval_every = 1
+    FLAGS.save_every = 1
     FLAGS.blur = 0.0
 
   # FLAGS.model = 'noise'
