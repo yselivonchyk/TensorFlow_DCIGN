@@ -26,8 +26,16 @@ PADDING = 'SAME'
 
 
 def clean_unpooling_masks(layer_config):
+  """
+  Cleans POOL_ARG configs positional information
+
+  :param layer_config: list of layer descriptors
+  :return: dictinary of ARGMAX_POOL layer name and corresponding mask source
+  """
+  dict = {}
   for cfg in layer_config:
     if cfg.type == POOL_ARG:
+      dict[cfg.name] = cfg.argmax
       cfg.argmax = None
 
 
@@ -39,9 +47,14 @@ def build_autoencoder(input, layer_config):
   ut.print_info('Model config:', color=CONFIG_COLOR)
   enc = build_encoder(input, layer_config, reuse=reuse_model)
   dec = build_decoder(enc, layer_config, reuse=reuse_model)
-  clean_unpooling_masks(layer_config)
+  positional_dictionary = clean_unpooling_masks(layer_config)
   losses = build_losses(layer_config)
-  return Bunch(encode=enc, decode=dec, losses=losses, config=layer_config)
+  return Bunch(
+    encode=enc,
+    decode=dec,
+    losses=losses,
+    config=layer_config,
+    positional_info=positional_dictionary)
 
 
 def build_encoder(net, layer_config, i=1, reuse=False):
@@ -62,6 +75,7 @@ def build_encoder(net, layer_config, i=1, reuse=False):
                       scope=name, reuse=reuse)
   elif cfg.type == POOL_ARG:
     net, cfg.argmax = nut.max_pool_with_argmax(net, cfg.kernel)
+    net.name = net.name
     # if not reuse:
     #   mask = nut.fake_arg_max_of_max_pool(cfg.shape, cfg.kernel)
     #   cfg.argmax_dummy = tf.constant(mask.flatten(), shape=mask.shape)
@@ -80,7 +94,7 @@ def build_encoder(net, layer_config, i=1, reuse=False):
   return build_encoder(net, layer_config, i + 1, reuse=reuse)
 
 
-def build_decoder(net, layer_config, i=None, reuse=False):
+def build_decoder(net, layer_config, i=None, reuse=False, masks=None):
   i = i if i is not None else len(layer_config) - 1
 
   cfg = layer_config[i]
@@ -98,8 +112,9 @@ def build_decoder(net, layer_config, i=None, reuse=False):
                                 activation_fn=cfg.activation, padding=PADDING,
                                 scope=name, reuse=reuse)
   elif cfg.type == POOL_ARG:
-    if cfg.argmax is not None:
-      net = nut.unpool(net, mask=cfg.argmax, stride=cfg.kernel)
+    if cfg.argmax is not None or masks is not None:
+      mask = cfg.argmax if cfg.argmax is not None else masks[cfg.name]
+      net = nut.unpool(net, mask=mask, stride=cfg.kernel)
     else:
       net = nut.upsample(net, stride=cfg.kernel)
   elif cfg.type == POOL:
@@ -113,7 +128,7 @@ def build_decoder(net, layer_config, i=None, reuse=False):
   if not reuse:
     cfg.dec_op_name = net.name.split('/')[0]
   ut.print_info('\rdecoder_%d \t%s' % (i, str(net)), color=CONFIG_COLOR)
-  return build_decoder(net, layer_config, i - 1, reuse=reuse)
+  return build_decoder(net, layer_config, i - 1, reuse=reuse, masks=masks)
 
 
 def build_losses(layer_config):

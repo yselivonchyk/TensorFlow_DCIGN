@@ -58,6 +58,7 @@ PREDICTIVE = 'pred'
 DENOISING = 'noise'
 
 CHECKPOINT_NAME = '-9999.chpt'
+EMB_SUFFIX = '_embedding'
 
 
 def is_stopping_point(current_epoch, epochs_to_train, stop_every=None, stop_x_times=None,
@@ -255,8 +256,8 @@ class Autoencoder:
     self.models = models
 
     # build predictive objective
-    pred_loss_2 = self._prediction_decode(models[1].encode*2 - models[0].encode, self.raw_targets[2])
-    pred_loss_0 = self._prediction_decode(models[1].encode*2 - models[2].encode, self.raw_targets[0])
+    pred_loss_2 = self._prediction_decode(models[1].encode*2 - models[0].encode, self.raw_targets[2], models[2])
+    pred_loss_0 = self._prediction_decode(models[1].encode*2 - models[2].encode, self.raw_targets[0], models[0])
 
     # Stitch it all together and train
     self.loss_reco = tf.add_n(reco_losses)
@@ -264,10 +265,9 @@ class Autoencoder:
     self.losses = [self.loss_reco, self.loss_pred]
 
 
-  def _prediction_decode(self, prediction, target):
+  def _prediction_decode(self, prediction, target, model):
     """Predict encoding t3 by encoding (t2 and t1) and expect a good reconstruction"""
-    # Construct graph part parts for prediction
-    predict_decode = interpreter.build_decoder(prediction, self.model.config, reuse=True)
+    predict_decode = interpreter.build_decoder(prediction, self.model.config, reuse=True, masks=model.positional_info)
     predict_loss = 1./2 * interpreter.l2_loss(predict_decode, target, alpha=FLAGS.alpha)
     self.models += [predict_decode]
     return predict_loss
@@ -278,34 +278,23 @@ class Autoencoder:
 
     # build denoising objective
     models = self.models
-    loss1 = self._noisy_decode(models[1].encode, models[0].encode)
-    loss2 = self._noisy_decode(models[1].encode, models[2].encode)
+    loss1 = self._noisy_decode(models[1].encode, models[0].encode, models[1])
+    loss2 = self._noisy_decode(models[1].encode, models[2].encode, models[1])
     self.loss_dn = loss2 + loss1
     self.losses = [self.loss_reco, self.loss_pred, self.loss_dn]
 
-  def _noisy_decode(self, x1, x2):
+  def _noisy_decode(self, x1, x2, model):
     """Distort middle encoding with [<= 1/3*dist(neigbour)] and demand good reconstruction"""
-    dist = l2(x1 - x2)
+    # dist = l2(x1 - x2)
     # noise = dist * self.epsilon_sphere_noise()
     # tf.stop_gradient(noise)
     noise = tf.random_normal(self.model.encode.get_shape().as_list()) * FLAGS.epsilon
     noisy_encoding = noise + self.models[1].encode
     tf.stop_gradient(noisy_encoding)  # or maybe here, who knows
-    noisy_decode = interpreter.build_decoder(noisy_encoding, self.model.config, reuse=True)
+    noisy_decode = interpreter.build_decoder(noisy_encoding, model.config, reuse=True, masks=model.positional_info)
     loss = 1./2 * interpreter.l2_loss(noisy_decode, self.raw_targets[1], alpha=FLAGS.beta)
-    # loss = tf.clip_by_norm(loss, clip_norm=1)
     self.models += [noisy_decode]
-    self.nloss = loss
-    self.dist = dist
     return loss
-
-  # def epsilon_sphere_noise(self):
-  #   mv_guassian = tf.random_normal(self.model.encode.get_shape().as_list())
-  #   norm = l2(mv_guassian)
-  #   sphere_noise = mv_guassian / norm
-  #   unit_noise = tf.random_uniform((FLAGS.batch_size, 1), maxval=1)
-  #   ball_noise = sphere_noise * unit_noise
-  #   return ball_noise * FLAGS.epsilon
 
   def _tensor_to_image(self, net):
     with tf.name_scope('to_image'):
@@ -487,6 +476,8 @@ class Autoencoder:
 
   def _restore_model(self, session):
     latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10], latest_filename='checkpoint')
+    if latest_checkpoint is not None:
+      latest_checkpoint = latest_checkpoint.replace(EMB_SUFFIX, '')
     ut.print_info("latest checkpoint: %s" % latest_checkpoint)
     if FLAGS.load_state and latest_checkpoint is not None:
       self.saver.restore(session, latest_checkpoint)
@@ -505,19 +496,14 @@ class Autoencoder:
     elapsed = time.time() - start_time
 
     if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.save_every):
-      self.embedding_saver.save(sess, self.get_checkpoint_path() + '_emb')
       self.saver.save(sess, self.get_checkpoint_path())
+      self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
 
-    accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
     self.epoch_stats.total_loss = guard_nan(self.epoch_stats.total_loss)
-    accuracy = guard_nan(accuracy)
+    accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
 
     if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.eval_every):
       evaluation = self.evaluate(sess, take=FLAGS.visualiza_max)
-
-      # Hack. Don't visualize ConvNets
-      if len(self.encode.get_shape().as_list()) > 2:
-        evaluation.encoded = np.random.randn(50, 2)
       data = {
         'enc': np.asarray(evaluation.encoded),
         'rec': np.asarray(evaluation.reconstructed),
@@ -529,15 +515,13 @@ class Autoencoder:
                                      evaluation.dumb_loss/evaluation.size)
       meta = Bunch(suf='encodings', e='%06d' % int(self.get_past_epochs()), er=error_info)
       np.save(meta.to_file_name(folder=FLAGS.save_path), data)
-      fig = vis.plot_encoding_crosssection(
+      vis.plot_encoding_crosssection(
         evaluation.encoded,
         meta.to_file_name(FLAGS.save_path, 'jpg'),
         evaluation.source,
         evaluation.reconstructed,
         interactive=FLAGS.dev)
-
       self._save_visualization_to_summary()
-
 
     self.stats.epoch_accuracy.append(accuracy)
     self._print_epoch_info(accuracy, epoch, FLAGS.max_epochs, elapsed)
@@ -585,7 +569,7 @@ if __name__ == '__main__':
   if len(args) <= 1:
     # FLAGS.input_path = '../data/tmp/romb8.5.6.tar.gz'
     # FLAGS.test_path = '../data/tmp/romb8.5.6.tar.gz'
-    # FLAGS.test_max = 2178
+    FLAGS.test_max = 2178
     FLAGS.max_epochs = 5
     FLAGS.eval_every = 1
     FLAGS.save_every = 1
