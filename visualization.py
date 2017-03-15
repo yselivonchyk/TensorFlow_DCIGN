@@ -117,6 +117,7 @@ def visualize_encoding(encodings, folder=None, meta={}, original=None, reconstru
     picture = _reshape_column_image(column_picture, height, proportion=proportion)
     if picture.shape[-1] == 1:
       picture = picture.squeeze()
+    plt.subplot(subplot).set_title("Original/reconstruction")
     plt.subplot(subplot).imshow(picture)
     plt.subplot(subplot).axis('off')
 
@@ -215,6 +216,11 @@ def _reshape_column_image(column_picture, height, proportion=1):
   width = column_picture.shape[1]
 
   column_size = int(np.ceil(np.sqrt(lines * proportion * (width / height))))
+
+  # get rid of too small columns. If singl last column contains 1 or 2 pictures
+  if lines % column_size <= lines / column_size:
+    column_size += 1
+
   count = int(column_picture.shape[0] / height)
   _, _, channels = column_picture.shape
 

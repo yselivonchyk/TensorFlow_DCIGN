@@ -24,11 +24,11 @@ tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'inpu
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
-tf.app.flags.DEFINE_string('model', 'ae', 'Type of the model to use: Autoencoder (ae)'
+tf.app.flags.DEFINE_string('model', 'pred', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
 tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
-tf.app.flags.DEFINE_float('beta', 5, 'Reconstruction from noisy data loss weight')
-tf.app.flags.DEFINE_float('epsilon', 0.05,
+tf.app.flags.DEFINE_float('beta', 0.0005, 'Reconstruction from noisy data loss weight')
+tf.app.flags.DEFINE_float('epsilon', 0.000001,
                           'Diameter of epsilon sphere comparing to distance to a neighbour. <= 0.5')
 tf.app.flags.DEFINE_string('comment', '', 'Comment to leave by the model')
 
@@ -50,6 +50,11 @@ tf.app.flags.DEFINE_integer('blur_decrease', 10000, 'Decrease image blur every X
 
 FLAGS = tf.app.flags.FLAGS
 slim = tf.contrib.slim
+
+
+AUTOENCODER = 'ae'
+PREDICTIVE = 'pred'
+DENOISING = 'noise'
 
 
 def is_stopping_point(current_epoch, epochs_to_train, stop_every=None, stop_x_times=None,
@@ -107,17 +112,17 @@ class Autoencoder:
   encode, decode = None, None   # AE operations
   model = None                  # interpreted model
 
-  encoding = None               # AE predictive evaluation placeholder
+  encoding = None                       # AE predictive evaluation placeholder
   eval_decode, eval_loss = None, None   # AE evaluation
 
-  inputs, targets = None, None  # Noise/Predictive placeholders
+  inputs, targets = None, None          # Noise/Predictive placeholders
   raw_inputs, raw_targets = None, None  # inputs in network-friendly representation
-  models = None                 # Noise/Predictive interpreted models
+  models = None                         # Noise/Predictive interpreted models
 
-  optimizer = None
-  train_ae, loss_ae = None, None      # AE objective
-  train_pred, loss_pred = None, None  # Predictive objective
-  train_dn, loss_dn = None, None      # Denoising objective
+  optimizer, train = None, None
+  loss_ae, loss_reco, loss_pred, loss_dn = None, None, None,  None   # Objectives
+  loss_total = None
+  losses = []
 
   step = None     # operation
   step_var = None # variable
@@ -133,7 +138,7 @@ class Autoencoder:
 
 
   def get_past_epochs(self):
-    return int(self.step_var.eval() / self.epoch_size)
+    return int(self.step.eval() / self.epoch_size)
 
   @staticmethod
   def get_checkpoint_path():
@@ -182,7 +187,7 @@ class Autoencoder:
   _blurred_dataset, _last_blur = None, 0
 
   def _get_blur_sigma(self):
-    calculated_sigma = FLAGS.blur - int(10 * self.step_var.eval() / FLAGS.blur_decrease) / 10.0
+    calculated_sigma = FLAGS.blur - int(10 * self.step.eval() / FLAGS.blur_decrease) / 10.0
     return max(0, calculated_sigma)
 
   # @ut.timeit
@@ -197,15 +202,13 @@ class Autoencoder:
     return self.train_set
 
 
-  # TRAIN
+# TRAIN
 
 
   def build_ae_model(self):
     self.input = tf.placeholder(tf.uint8, self.batch_shape, name='input')
     self.target = tf.placeholder(tf.uint8, self.batch_shape, name='target')
-
-    self.step_var = tf.Variable(0, trainable=False, name='global_step')
-    self.step = tf.assign(self.step_var, self.step_var + 1)
+    self.step = tf.Variable(0, trainable=False, name='global_step')
 
     root = self._image_to_tensor(self.input)
     target = self._image_to_tensor(self.target)
@@ -219,12 +222,9 @@ class Autoencoder:
     self.eval_loss = interpreter.l2_loss(target, eval_decode, name='predictive_reconstruction')
     self.eval_decode = self._tensor_to_image(eval_decode)
 
-
     self.loss_ae = interpreter.l2_loss(target, model.decode, name='reconstruction')
-    self.optimizer = self.optimizer_constructor(learning_rate=FLAGS.learning_rate)
-    self.train_ae = self.optimizer.minimize(self.loss_ae)
-
     self.decode = self._tensor_to_image(model.decode)
+    self.losses = [self.loss_ae]
 
 
   def build_predictive_model(self):
@@ -247,11 +247,13 @@ class Autoencoder:
     pred_loss_0 = self._prediction_decode(models[1].encode*2 - models[2].encode, self.raw_targets[0])
 
     # Stitch it all together and train
-    self.loss_pred = tf.add_n(reco_losses + [pred_loss_0, pred_loss_2])
-    self.train_pred = self.optimizer.minimize(self.loss_pred)
+    self.loss_reco = tf.add_n(reco_losses)
+    self.loss_pred = pred_loss_0 + pred_loss_2
+    self.losses = [self.loss_reco, self.loss_pred]
+
 
   def _prediction_decode(self, prediction, target):
-    """Predict encoding t3 by encoding t2 and t1 and expect a good reconstruction"""
+    """Predict encoding t3 by encoding (t2 and t1) and expect a good reconstruction"""
     # Construct graph part parts for prediction
     predict_decode = interpreter.build_decoder(prediction, self.model.config, reuse=True)
     predict_loss = 1./2 * interpreter.l2_loss(predict_decode, target, alpha=FLAGS.alpha)
@@ -266,30 +268,32 @@ class Autoencoder:
     models = self.models
     loss1 = self._noisy_decode(models[1].encode, models[0].encode)
     loss2 = self._noisy_decode(models[1].encode, models[2].encode)
-
-    self.loss_pred = self.loss_pred + loss1 + loss2
-    self.train_pred = self.optimizer.minimize(self.loss_pred)
+    self.loss_dn = loss2 + loss1
+    self.losses = [self.loss_reco, self.loss_pred, self.loss_dn]
 
   def _noisy_decode(self, x1, x2):
     """Distort middle encoding with [<= 1/3*dist(neigbour)] and demand good reconstruction"""
     dist = l2(x1 - x2)
-    noise = dist * self.epsilon_sphere_noise()
-    tf.stop_gradient(noise)
+    # noise = dist * self.epsilon_sphere_noise()
+    # tf.stop_gradient(noise)
+    noise = tf.random_normal(self.model.encode.get_shape().as_list()) * FLAGS.epsilon
     noisy_encoding = noise + self.models[1].encode
-    # tf.stop_gradient(noisy_encoding)  # or maybe here, who knows
+    tf.stop_gradient(noisy_encoding)  # or maybe here, who knows
     noisy_decode = interpreter.build_decoder(noisy_encoding, self.model.config, reuse=True)
     loss = 1./2 * interpreter.l2_loss(noisy_decode, self.raw_targets[1], alpha=FLAGS.beta)
-    loss = tf.clip_by_norm(loss, clip_norm=10000)
+    # loss = tf.clip_by_norm(loss, clip_norm=1)
     self.models += [noisy_decode]
+    self.nloss = loss
+    self.dist = dist
     return loss
 
-  def epsilon_sphere_noise(self):
-    mv_guassian = tf.random_normal(self.model.encode.get_shape().as_list())
-    norm = l2(mv_guassian)
-    sphere_noise = mv_guassian / norm
-    unit_noise = tf.random_uniform((FLAGS.batch_size, 1), maxval=1)
-    ball_noise = sphere_noise * unit_noise
-    return ball_noise * FLAGS.epsilon
+  # def epsilon_sphere_noise(self):
+  #   mv_guassian = tf.random_normal(self.model.encode.get_shape().as_list())
+  #   norm = l2(mv_guassian)
+  #   sphere_noise = mv_guassian / norm
+  #   unit_noise = tf.random_uniform((FLAGS.batch_size, 1), maxval=1)
+  #   ball_noise = sphere_noise * unit_noise
+  #   return ball_noise * FLAGS.epsilon
 
   def _tensor_to_image(self, net):
     with tf.name_scope('to_image'):
@@ -308,37 +312,22 @@ class Autoencoder:
         FLAGS.blur = 0.
     return net
 
+  def _init_optimizer(self):
+    self.loss_total = tf.add_n(self.losses, 'loss_total')
+    self.optimizer = self.optimizer_constructor(learning_rate=FLAGS.learning_rate)
+    self.train = self.optimizer.minimize(self.loss_total, global_step=self.step)
+
+
+# MAIN
   def train(self):
     self.fetch_datasets()
-    self.build_ae_model()
-
-    with tf.Session() as sess:
-      sess.run(tf.global_variables_initializer())
-      self._on_training_start(sess)
-
-      try:
-        for current_epoch in range(FLAGS.max_epochs):
-          start = time.time()
-          for batch in self._batch_generator():
-            encoding, reconstruction, loss, _, step = sess.run(
-                [self.encode, self.decode, self.loss_ae, self.train_ae, self.step],
-                feed_dict={self.input: batch[0], self.target: batch[1]}
-            )
-            self._on_batch_finish(loss, batch, encoding, reconstruction)
-          self._on_epoch_finish(current_epoch, start, sess)
-        self._on_training_finish()
-      except KeyboardInterrupt:
-        self._on_training_abort(sess)
-
-
-  def train_predictive(self):
-    self.fetch_datasets()
-    if 'noi' in FLAGS.model:
-      print('DENOISING')
-      self.build_denoising_model()
-    else:
-      print('PREDICTIVE')
+    if FLAGS.model == AUTOENCODER:
+      self.build_ae_model()
+    elif FLAGS.model == PREDICTIVE:
       self.build_predictive_model()
+    else:
+      self.build_denoising_model()
+    self._init_optimizer()
 
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
@@ -348,28 +337,30 @@ class Autoencoder:
         for current_epoch in range(FLAGS.max_epochs):
           start = time.time()
           ds = self._get_blurred_dataset()
-          for batch_indexes in self._batch_permutation_generator(len(ds)-2):
-            batch = np.stack((ds[batch_indexes], ds[batch_indexes + 1], ds[batch_indexes + 2]))
-            loss, _, step = sess.run([self.loss_pred, self.train_pred, self.step],
-                                     feed_dict={self.inputs: batch, self.targets: batch})
-            # print(np.concatenate((d, n), axis=1))
-            self._on_batch_finish(loss)
+          if FLAGS.model == AUTOENCODER:
+
+            # Autoencoder Training
+            for batch in self._batch_generator():
+              encoding, reconstruction, loss, _, step = sess.run(
+                [self.encode, self.decode, self.loss_ae, self.train_ae, self.step],
+                feed_dict={self.input: batch[0], self.target: batch[1]}
+              )
+              self._on_batch_finish(loss, batch, encoding, reconstruction)
+
+          else:
+
+            # Predictive and Denoising training
+            for batch_indexes in self._batch_permutation_generator(len(ds)-2):
+              batch = np.stack((ds[batch_indexes], ds[batch_indexes + 1], ds[batch_indexes + 2]))
+              summs, loss, _ = sess.run(
+                [self.summs_train, self.loss_total, self.train],
+                feed_dict={self.inputs: batch, self.targets: batch})
+              self._on_batch_finish(summs, loss)
+
           self._on_epoch_finish(current_epoch, start, sess)
         self._on_training_finish()
       except KeyboardInterrupt:
         self._on_training_abort(sess)
-
-  # def naive_evaluate(self, sess, take):
-  #   digest = Bunch(encoded=None, reconstructed=None, source=None)
-  #   blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
-  #   for batch in self._batch_generator(blurred, shuffle=False):
-  #     encoding = self.encode.eval(feed_dict={self.input: batch[0]})
-  #     digest.encoded = ut.concatenate(digest.encoded, encoding)
-  #
-  #   for batch in self._batch_generator(blurred, batches=1):
-  #     digest.source = batch[1][:take]
-  #     digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
-  #   return digest
 
 
   def evaluate(self, sess, take):
@@ -404,10 +395,16 @@ class Autoencoder:
     return digest
 
 
-  # TRAINING PROGRESS EVENTS
+# TRAINING PROGRESS EVENTS
 
 
   def _on_training_start(self, sess):
+    with tf.name_scope('losses'):
+      loss_names = ['loss_autoencoder', 'loss_predictive', 'loss_denoising']
+      for i, loss in enumerate(self.losses):
+        self._add_summary(loss_names[i], loss)
+      self._add_summary('loss_total', self.loss_total)
+
     self.summary_writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
     self.saver = tf.train.Saver()
 
@@ -424,6 +421,12 @@ class Autoencoder:
       plt.ion()
       plt.show()
 
+    self.summs_train = tf.summary.merge_all('train')
+
+  def _add_summary(self, name, var, collection='train'):
+    tf.summary.scalar(name, var, [collection])
+    tf.summary.scalar('log_' + name, tf.log(var), [collection])
+
   def _restore_model(self, session):
     latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10])
     ut.print_info("latest checkpoint: %s" % latest_checkpoint)
@@ -431,7 +434,8 @@ class Autoencoder:
       self.saver.restore(session, latest_checkpoint)
       ut.print_info('Restored requested. Previous epoch: %d' % self.get_past_epochs(), color=31)
 
-  def _on_batch_finish(self, loss, batch=None, encoding=None, reconstruction=None):
+  def _on_batch_finish(self, summs, loss, batch=None, encoding=None, reconstruction=None):
+    self.summary_writer.add_summary(summs, global_step=self.step.eval())
     self.epoch_stats.total_loss += loss
 
     if False:
@@ -507,17 +511,26 @@ class Autoencoder:
 if __name__ == '__main__':
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
   if len(args) <= 1:
-    FLAGS.input_path = '../data/tmp/romb8.5.6.tar.gz'
-    FLAGS.test_path = '../data/tmp/romb8.5.6.tar.gz'
-    FLAGS.test_max = 2178
+    # FLAGS.input_path = '../data/tmp/romb8.5.6.tar.gz'
+    # FLAGS.test_path = '../data/tmp/romb8.5.6.tar.gz'
+    # FLAGS.test_max = 2178
     FLAGS.max_epochs = 50
     FLAGS.eval_every = 1
     FLAGS.blur = 0.0
 
+  # FLAGS.model = 'noise'
+  # FLAGS.beta = .0
+  # FLAGS.epsilon = .000001
+
   model = Autoencoder()
   if FLAGS.model == 'ae':
-    model.train()
-  elif 'pred' in FLAGS.model or 'noi' in FLAGS.model:
-    model.train_predictive()
+    FLAGS.model = AUTOENCODER
+  elif 'pred' in FLAGS.model:
+    print('PREDICTIVE')
+    FLAGS.model = PREDICTIVE
+  elif 'noi' in FLAGS.model:
+    print('DENOISING')
+    FLAGS.model = DENOISING
   else:
     print('Do-di-li-doo doo-di-li-don')
+  model.train()
