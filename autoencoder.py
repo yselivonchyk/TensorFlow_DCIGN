@@ -131,6 +131,9 @@ class Autoencoder:
   step = None     # operation
   step_var = None # variable
 
+  vis_summary, vis_placeholder = None, None
+  image_summaries = None
+
 
   def __init__(self, optimizer=tf.train.AdamOptimizer):
     self.optimizer_constructor = optimizer
@@ -147,12 +150,6 @@ class Autoencoder:
   @staticmethod
   def get_checkpoint_path():
     return os.path.join(FLAGS.save_path, CHECKPOINT_NAME)
-
-  def get_image_shape(self):
-    return self.batch_shape[2:]
-
-  def get_decoding_shape(self):
-    return self.batch_shape[:1] + self.batch_shape[2:]
 
 
   # DATA
@@ -229,16 +226,6 @@ class Autoencoder:
     self.loss_ae = interpreter.l2_loss(target, model.decode, name='reconstruction')
     self.decode = self._tensor_to_image(model.decode)
     self.losses = [self.loss_ae]
-
-    with tf.name_scope('decodings'):
-      self.image_summaries = {
-        'orig': self._add_decoding_summary('0_original_input', self.input),
-        'reco': self._add_decoding_summary('1_reconstruction', self.eval_decode),
-        'pred': self._add_decoding_summary('2_prediction', self.eval_decode),
-        'midd': self._add_decoding_summary('3_averaged', self.eval_decode),
-        'nois': self._add_decoding_summary('4_noisy', self.eval_decode)
-      }
-
 
   def build_predictive_model(self):
     self.build_ae_model()  # builds on top of AE model. Due to auxilary operations init
@@ -370,13 +357,14 @@ class Autoencoder:
     digest = Bunch(encoded=None, reconstructed=None, source=None,
                    loss=.0, eval_loss=.0, dumb_loss=.0)
     blurred = inp.apply_gaussian(self.test_set, self._get_blur_sigma())
+    # Encode
     for i, batch in enumerate(self._batch_generator(blurred, shuffle=False)):
       encoding = self.encode.eval(feed_dict={self.input: batch[0]})
       digest.encoded = ut.concatenate(digest.encoded, encoding)
-
+    # Save encoding for visualization
     embedding = np.zeros(self.embedding_test.get_shape().as_list())
     self.embedding_assign.eval(feed_dict={self.embedding_test_ph: embedding})
-
+    # Calculate expected evaluation
     expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
     average = 0.5 * (digest.encoded[1:-1] + digest.encoded[:-2])
     digest.size = len(expected)
@@ -390,6 +378,7 @@ class Autoencoder:
     #   digest.source = batch[1][:take]
     #   digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
 
+    # Visualize various decondings
     for p in self._batch_permutation_generator(digest.size, shuffle=True, batches=1):
       digest.source = self.eval_decode.eval(feed_dict={self.encoding: expected[p]})[:take]
       digest.reconstructed = self.eval_decode.eval(feed_dict={self.encoding: average[p]})[:take]
@@ -402,12 +391,14 @@ class Autoencoder:
 
   def _eval_image_summaries(self, blurred_batch, actual, average, expected):
     """Create Tensorboard summaries with image reconstructions"""
+    noisy = expected + np.random.randn(*expected.shape) * FLAGS.epsilon
+
     summary = self.image_summaries['orig'].eval(feed_dict={self.input: blurred_batch})
     self.summary_writer.add_summary(summary, global_step=self.get_past_epochs())
+
     self._eval_image_summary('midd', average)
     # self._eval_image_summary('reco', actual)
     self._eval_image_summary('pred', expected)
-    noisy = expected + np.random.randn(*expected.shape) * FLAGS.epsilon
     self._eval_image_summary('nois', noisy)
 
   def _eval_image_summary(self, name, encdoding_batch):
@@ -436,6 +427,14 @@ class Autoencoder:
       self._add_loss_summary('loss_total', self.loss_total)
     self.summs_train = tf.summary.merge_all('train')
 
+    with tf.name_scope('decodings'):
+      self.image_summaries = {
+        'orig': self._add_decoding_summary('0_original_input', self.input),
+        'reco': self._add_decoding_summary('1_reconstruction', self.eval_decode),
+        'pred': self._add_decoding_summary('2_prediction', self.eval_decode),
+        'midd': self._add_decoding_summary('3_averaged', self.eval_decode),
+        'nois': self._add_decoding_summary('4_noisy', self.eval_decode)
+      }
 
     # Writers and savers
     self.summary_writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
@@ -455,6 +454,10 @@ class Autoencoder:
 
 
   def _build_embedding_saver(self, sess):
+    """To use embedding visualizer data has to be stored in variable
+    since we would like to visualize TEST_SET, this variable should not affect
+    common checkpoint of the model.
+    Hence, we build a separate variable with a separate saver."""
     embedding_shape = [int(len(self.test_set) / FLAGS.batch_size) * FLAGS.batch_size,
                        self.encode.get_shape().as_list()[1]]
     self.embedding_test_ph = tf.placeholder(tf.float32, embedding_shape, name='embedding')
@@ -468,7 +471,6 @@ class Autoencoder:
     # embedding.metadata_path = os.path.join(LOG_DIR, 'metadata.tsv')
     projector.visualize_embeddings(self.summary_writer, config)
     sess.run(tf.variables_initializer([self.embedding_test], name='init_embeddings'))
-
 
   def _add_loss_summary(self, name, var, collection='train'):
     tf.summary.scalar(name, var, [collection])
@@ -492,16 +494,16 @@ class Autoencoder:
       original = batch[0]
       vis.plot_reconstruction(original, reconstruction, interactive=True)
 
+
   def _on_epoch_finish(self, epoch, start_time, sess):
     elapsed = time.time() - start_time
-
+    self.epoch_stats.total_loss = guard_nan(self.epoch_stats.total_loss)
+    accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
+    # SAVE
     if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.save_every):
       self.saver.save(sess, self.get_checkpoint_path())
       self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
-
-    self.epoch_stats.total_loss = guard_nan(self.epoch_stats.total_loss)
-    accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
-
+    # VISUALIZE
     if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.eval_every):
       evaluation = self.evaluate(sess, take=FLAGS.visualiza_max)
       data = {
@@ -522,14 +524,11 @@ class Autoencoder:
         evaluation.reconstructed,
         interactive=FLAGS.dev)
       self._save_visualization_to_summary()
-
     self.stats.epoch_accuracy.append(accuracy)
     self._print_epoch_info(accuracy, epoch, FLAGS.max_epochs, elapsed)
     if epoch + 1 != FLAGS.max_epochs:
       self.epoch_stats = get_stats_template()
 
-  vis_summary = None
-  vis_placeholder = None
 
   def _save_visualization_to_summary(self):
     image = ut.fig2rgb_array(plt.figure(num=0))

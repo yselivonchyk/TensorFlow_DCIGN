@@ -4,6 +4,7 @@ import tensorflow.contrib.slim as slim
 import network_utils as nut
 import utils as ut
 import re
+import os
 from Bunch import Bunch
 
 INPUT = 'input'
@@ -32,11 +33,11 @@ def clean_unpooling_masks(layer_config):
   :param layer_config: list of layer descriptors
   :return: dictinary of ARGMAX_POOL layer name and corresponding mask source
   """
-  dict = {}
+  mask_list = [cfg.argmax for cfg in layer_config if cfg.type == POOL_ARG]
   for cfg in layer_config:
     if cfg.type == POOL_ARG:
-      dict[cfg.name] = cfg.argmax
       cfg.argmax = None
+  return mask_list
 
 
 def build_autoencoder(input, layer_config):
@@ -47,14 +48,14 @@ def build_autoencoder(input, layer_config):
   ut.print_info('Model config:', color=CONFIG_COLOR)
   enc = build_encoder(input, layer_config, reuse=reuse_model)
   dec = build_decoder(enc, layer_config, reuse=reuse_model)
-  positional_dictionary = clean_unpooling_masks(layer_config)
+  mask_list = clean_unpooling_masks(layer_config)
   losses = build_losses(layer_config)
   return Bunch(
     encode=enc,
     decode=dec,
     losses=losses,
     config=layer_config,
-    positional_info=positional_dictionary)
+    mask_list=mask_list)
 
 
 def build_encoder(net, layer_config, i=1, reuse=False):
@@ -75,7 +76,6 @@ def build_encoder(net, layer_config, i=1, reuse=False):
                       scope=name, reuse=reuse)
   elif cfg.type == POOL_ARG:
     net, cfg.argmax = nut.max_pool_with_argmax(net, cfg.kernel)
-    net.name = net.name
     # if not reuse:
     #   mask = nut.fake_arg_max_of_max_pool(cfg.shape, cfg.kernel)
     #   cfg.argmax_dummy = tf.constant(mask.flatten(), shape=mask.shape)
@@ -113,7 +113,7 @@ def build_decoder(net, layer_config, i=None, reuse=False, masks=None):
                                 scope=name, reuse=reuse)
   elif cfg.type == POOL_ARG:
     if cfg.argmax is not None or masks is not None:
-      mask = cfg.argmax if cfg.argmax is not None else masks[cfg.name]
+      mask = cfg.argmax if cfg.argmax is not None else masks.pop()
       net = nut.unpool(net, mask=mask, stride=cfg.kernel)
     else:
       net = nut.upsample(net, stride=cfg.kernel)
@@ -206,66 +206,8 @@ def parse_input(input):
 
 
 def _log_graph():
+  path = '/tmp/interpreter'
   with tf.Session() as sess:
     tf.global_variables_initializer()
-    tf.summary.FileWriter('/tmp/interpreter', sess.graph)
-
-
-def _test_parameter_reuse_conv():
-  input = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input')
-  model = build_autoencoder(input, '8c3s2-16c3s2-32c3s2-1c3-f4')
-
-  input = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input')
-  model = build_autoencoder(input, '8c3s2-16c3s2-32c3s2-1c3-f4')
-  l2_loss(input, model.decode)
-
-  input = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input')
-  model = build_autoencoder(input, model.config)
-  l2_loss(input, model.decode)
-
-
-def _test_parameter_reuse_decoder():
-  input = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input')
-  model = build_autoencoder(input, '8c3s2-16c3s2-32c3s2-16c3-f4')
-
-  input = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input')
-  model = build_autoencoder(input, '8c3s2-16c3s2-32c3s2-16c3-f4')
-
-  input_enc = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input_encoder')
-  encoder = build_encoder(input_enc, model.config, reuse=True)
-
-  input_dec = tf.placeholder(tf.float32, (2, 4), name='input_decoder')
-  decoder = build_decoder(input_dec, model.config, reuse=True)
-
-  l2_loss(input, model.decode)
-  l2_loss(encoder, model.encode)
-  l2_loss(decoder, model.decode)
-
-
-def _test_armgax_ae():
-  input = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input')
-  model = build_autoencoder(input, '8c3-ap2-16c3-ap2-32c3-ap2-16c3-f4')
-
-  input = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input')
-  model = build_autoencoder(input, '8c3-ap2-16c3-ap2-32c3-ap2-16c3-f4')
-
-  input_enc = tf.placeholder(tf.float32, (2, 120, 120, 4), name='input_encoder')
-  encoder = build_encoder(input_enc, model.config, reuse=True)
-
-  input_dec = tf.placeholder(tf.float32, (2, 4), name='input_decoder')
-  decoder = build_decoder(input_dec, model.config, reuse=True)
-
-  l2_loss(input, model.decode)
-  l2_loss(encoder, model.encode)
-  l2_loss(decoder, model.decode)
-
-
-
-if __name__ == '__main__':
-  # print(re.match('\d+c\d+(s\d+)?[r|s|i|t]?', '8c3s2'))
-  model = build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3s2-16c3s2-30c3s2-16c3-f4')
-  # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '10c3-f100-f10')
-  # _test_parameter_reuse_conv()
-  # _test_parameter_reuse_decoder()
-  # _test_armgax_ae()
-  _log_graph()
+    tf.summary.FileWriter(path, sess.graph)
+    ut.print_color(os.path.abspath(path), color=33)
