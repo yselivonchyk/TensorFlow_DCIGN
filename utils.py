@@ -224,10 +224,10 @@ def configure_folders(FLAGS):
   FLAGS.logdir = os.path.abspath(os.path.join(FLAGS.save_path))
   mkdir([TEMP_FOLDER, IMAGE_FOLDER, FLAGS.save_path, FLAGS.logdir])
 
-  with open(os.path.join(FLAGS.save_path, 'note.txt'), "a") as f:
+  with open(os.path.join(FLAGS.save_path, '!note.txt'), "a") as f:
     f.write(print_flags(FLAGS, print=False))
     if len(FLAGS.comment) > 0:
-      f.write(FLAGS.comment)
+      f.write('\n\n' + FLAGS.comment)
 
 
 def get_latest_file(folder="./visualizations/", filter=None):

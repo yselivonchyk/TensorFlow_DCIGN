@@ -81,7 +81,8 @@ def _fetch_dataset(path, take=None):
 
 
 def l2(x):
-  return tf.reshape(tf.sqrt(tf.reduce_sum(x ** 2, axis=1)), (FLAGS.batch_size, 1))
+  l = x.get_shape().as_list()[0]
+  return tf.reshape(tf.sqrt(tf.reduce_sum(x ** 2, axis=1)), (l, 1))
 
 
 def get_stats_template():
@@ -254,7 +255,7 @@ class Autoencoder:
 
   def _prediction_decode(self, prediction, target, model):
     """Predict encoding t3 by encoding (t2 and t1) and expect a good reconstruction"""
-    predict_decode = interpreter.build_decoder(prediction, self.model.config, reuse=True, masks=model.positional_info)
+    predict_decode = interpreter.build_decoder(prediction, self.model.config, reuse=True, masks=model.mask_list)
     predict_loss = 1./2 * interpreter.l2_loss(predict_decode, target, alpha=FLAGS.alpha)
     self.models += [predict_decode]
     return predict_loss
@@ -278,7 +279,7 @@ class Autoencoder:
     noise = tf.random_normal(self.model.encode.get_shape().as_list()) * FLAGS.epsilon
     noisy_encoding = noise + self.models[1].encode
     tf.stop_gradient(noisy_encoding)  # or maybe here, who knows
-    noisy_decode = interpreter.build_decoder(noisy_encoding, model.config, reuse=True, masks=model.positional_info)
+    noisy_decode = interpreter.build_decoder(noisy_encoding, model.config, reuse=True, masks=model.mask_list)
     loss = 1./2 * interpreter.l2_loss(noisy_decode, self.raw_targets[1], alpha=FLAGS.beta)
     self.models += [noisy_decode]
     return loss
@@ -352,7 +353,7 @@ class Autoencoder:
       except KeyboardInterrupt:
         self._on_training_abort(sess)
 
-
+  # @ut.timeit
   def evaluate(self, sess, take):
     digest = Bunch(encoded=None, reconstructed=None, source=None,
                    loss=.0, eval_loss=.0, dumb_loss=.0)
@@ -364,6 +365,10 @@ class Autoencoder:
     # Save encoding for visualization
     embedding = np.zeros(self.embedding_test.get_shape().as_list())
     self.embedding_assign.eval(feed_dict={self.embedding_test_ph: embedding})
+
+    self.summary_writer.add_summary(self.eval_summs.eval(
+      feed_dict={self.blur_ph: self._get_blur_sigma()}),
+      global_step=self.get_past_epochs())
     # Calculate expected evaluation
     expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
     average = 0.5 * (digest.encoded[1:-1] + digest.encoded[:-2])
@@ -419,28 +424,13 @@ class Autoencoder:
 
 
   def _on_training_start(self, sess):
-    # Loss summaries
-    with tf.name_scope('losses'):
-      loss_names = ['loss_autoencoder', 'loss_predictive', 'loss_denoising']
-      for i, loss in enumerate(self.losses):
-        self._add_loss_summary(loss_names[i], loss)
-      self._add_loss_summary('loss_total', self.loss_total)
-    self.summs_train = tf.summary.merge_all('train')
-
-    with tf.name_scope('decodings'):
-      self.image_summaries = {
-        'orig': self._add_decoding_summary('0_original_input', self.input),
-        'reco': self._add_decoding_summary('1_reconstruction', self.eval_decode),
-        'pred': self._add_decoding_summary('2_prediction', self.eval_decode),
-        'midd': self._add_decoding_summary('3_averaged', self.eval_decode),
-        'nois': self._add_decoding_summary('4_noisy', self.eval_decode)
-      }
-
     # Writers and savers
     self.summary_writer = tf.summary.FileWriter(FLAGS.logdir, sess.graph)
     self.saver = tf.train.Saver()
     self._build_embedding_saver(sess)
     self._restore_model(sess)
+    # Loss summaries
+    self._build_summaries()
 
     self.epoch_stats = get_stats_template()
     self.stats = Bunch(
@@ -451,6 +441,34 @@ class Autoencoder:
     # if FLAGS.dev:
     #   plt.ion()
     #   plt.show()
+
+  def _build_summaries(self):
+    # losses
+    with tf.name_scope('losses'):
+      loss_names = ['loss_autoencoder', 'loss_predictive', 'loss_denoising']
+      for i, loss in enumerate(self.losses):
+        self._add_loss_summary(loss_names[i], loss)
+      self._add_loss_summary('loss_total', self.loss_total)
+    self.summs_train = tf.summary.merge_all('train')
+    # reconstructions
+    with tf.name_scope('decodings'):
+      self.image_summaries = {
+        'orig': self._add_decoding_summary('0_original_input', self.input),
+        'reco': self._add_decoding_summary('1_reconstruction', self.eval_decode),
+        'pred': self._add_decoding_summary('2_prediction', self.eval_decode),
+        'midd': self._add_decoding_summary('3_averaged', self.eval_decode),
+        'nois': self._add_decoding_summary('4_noisy', self.eval_decode)
+      }
+    # visualization
+    self.vis_placeholder = tf.placeholder(tf.uint8,  ut.fig2rgb_array(plt.figure(num=0)).shape)
+    self.vis_summary = tf.summary.image('visualization', self.vis_placeholder)
+    # embedding
+    dists = l2(self.embedding_test[:-1] - self.embedding_test[1:])
+    embedding_d_hist = tf.summary.histogram('point distance', dists)
+    embedding_trajectory = tf.summary.scalar('trajectory_length', tf.reduce_sum(dists))
+    self.blur_ph = tf.placeholder(dtype=tf.float32)
+    blur_summ = tf.summary.scalar('blur_sigma', self.blur_ph)
+    self.eval_summs = tf.summary.merge([embedding_d_hist, embedding_trajectory, blur_summ])
 
 
   def _build_embedding_saver(self, sess):
@@ -494,7 +512,7 @@ class Autoencoder:
       original = batch[0]
       vis.plot_reconstruction(original, reconstruction, interactive=True)
 
-
+  # @ut.timeit
   def _on_epoch_finish(self, epoch, start_time, sess):
     elapsed = time.time() - start_time
     self.epoch_stats.total_loss = guard_nan(self.epoch_stats.total_loss)
@@ -529,13 +547,8 @@ class Autoencoder:
     if epoch + 1 != FLAGS.max_epochs:
       self.epoch_stats = get_stats_template()
 
-
   def _save_visualization_to_summary(self):
     image = ut.fig2rgb_array(plt.figure(num=0))
-
-    if self.vis_summary is None:
-      self.vis_placeholder = tf.placeholder(tf.uint8, image.shape)
-      self.vis_summary = tf.summary.image('visualization', self.vis_placeholder)
     self.summary_writer.add_summary(self.vis_summary.eval(feed_dict={self.vis_placeholder: image}))
 
   def _print_epoch_info(self, accuracy, current_epoch, epochs, elapsed):
@@ -574,9 +587,9 @@ if __name__ == '__main__':
     FLAGS.save_every = 1
     FLAGS.blur = 0.0
 
-  # FLAGS.model = 'noise'
-  # FLAGS.beta = .0
-  # FLAGS.epsilon = .000001
+    # FLAGS.model = 'noise'
+    # FLAGS.beta = 1.0
+    # FLAGS.epsilon = .000001
 
   model = Autoencoder()
   if FLAGS.model == 'ae':
