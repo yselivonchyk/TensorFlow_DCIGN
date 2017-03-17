@@ -220,8 +220,9 @@ def mkdir(folders):
 
 def configure_folders(FLAGS):
   folder_name = model_to_file_name(FLAGS) + '/'
-  FLAGS.save_path = os.path.abspath(os.path.join(TEMP_FOLDER, folder_name))
-  FLAGS.logdir = os.path.abspath(os.path.join(FLAGS.save_path))
+  FLAGS.save_path = os.path.join(TEMP_FOLDER, folder_name)
+  FLAGS.logdir = FLAGS.save_path
+  print_color(os.path.abspath(FLAGS.logdir))
   mkdir([TEMP_FOLDER, IMAGE_FOLDER, FLAGS.save_path, FLAGS.logdir])
 
   with open(os.path.join(FLAGS.save_path, '!note.txt'), "a") as f:

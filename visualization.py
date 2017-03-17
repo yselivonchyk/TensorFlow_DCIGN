@@ -36,7 +36,7 @@ def scatter(plot, data, is3d, colors):
 
 
 def print_data_only(data, file_name, fig=None, interactive=False):
-  fig = _get_figure(fig)
+  fig = get_figure(fig)
   subplot_number = 121 if fig is not None else 111
   fig.set_size_inches(fig.get_size_inches()[0] * 2, fig.get_size_inches()[1] * 1)
 
@@ -109,7 +109,7 @@ def visualize_encoding(encodings, folder=None, meta={}, original=None, reconstru
 
   if original is not None:
     assert len(original) == len(reconstruction)
-    fig = _get_figure()
+    fig = get_figure()
 
     # print('reco max:', np.max(reconstruction))
     column_picture, height = _stitch_images(original, reconstruction)
@@ -133,7 +133,7 @@ def plot_encoding_crosssection(encodings, file_path, original=None, reconstructi
   # print(reconstruction.shape)
   # encodings = manual_pca(encodings)
 
-  fig = _get_figure()
+  fig = get_figure()
   if original is not None:
     assert len(original) == len(reconstruction),  (len(original), len(reconstruction))
     subplot, proportion = visualize_cross_section_with_reco(encodings)
@@ -243,11 +243,14 @@ def _reshape_column_image(column_picture, height, proportion=1):
   return picture
 
 
-def _get_figure(fig=None):
+figure_shape = [3095, 2352, 3]
+
+
+def get_figure(fig=None):
   if fig is not None:
     return fig
   dpi = 300.
-  fig = plt.figure(num=0, figsize=(3095/dpi, 2352/dpi), dpi=dpi)
+  fig = plt.figure(num=0, figsize=[figure_shape[0]/dpi, figure_shape[1]/dpi], dpi=dpi)
   fig.clf()
   return fig
 
@@ -373,7 +376,7 @@ def visualize_encodings(encodings, file_name=None,
     j = v + u * skip_every + 1
     plot_places.append(j)
 
-  fig = _get_figure(fig)
+  fig = get_figure(fig)
   fig.set_size_inches(fig.get_size_inches()[0] * grid[0] / 1.,
                       fig.get_size_inches()[1] * grid[1] / 2.0)
 

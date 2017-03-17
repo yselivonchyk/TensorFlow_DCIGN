@@ -24,7 +24,7 @@ from Bunch import Bunch
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
-tf.app.flags.DEFINE_string('net', 'f20-f4', 'model configuration')
+tf.app.flags.DEFINE_string('net', 'f100-f3', 'model configuration')
 tf.app.flags.DEFINE_string('model', 'pred', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
 tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
@@ -363,17 +363,18 @@ class Autoencoder:
       encoding = self.encode.eval(feed_dict={self.input: batch[0]})
       digest.encoded = ut.concatenate(digest.encoded, encoding)
     # Save encoding for visualization
-    embedding = np.zeros(self.embedding_test.get_shape().as_list())
-    self.embedding_assign.eval(feed_dict={self.embedding_test_ph: embedding})
+    self.embedding_assign.eval(feed_dict={self.embedding_test_ph: digest.encoded})
+    self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
 
-    self.summary_writer.add_summary(self.eval_summs.eval(
-      feed_dict={self.blur_ph: self._get_blur_sigma()}),
-      global_step=self.get_past_epochs())
     # Calculate expected evaluation
     expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
     average = 0.5 * (digest.encoded[1:-1] + digest.encoded[:-2])
     digest.size = len(expected)
-
+    # evaluation summaries
+    self.summary_writer.add_summary(self.eval_summs.eval(
+      feed_dict={self.blur_ph: self._get_blur_sigma()}),
+      global_step=self.get_past_epochs())
+    # evaluation losses
     for p in self._batch_permutation_generator(digest.size, shuffle=False):
       digest.loss      += self.eval_loss.eval(feed_dict={self.encoding: digest.encoded[p + 2], self.target: blurred[p + 2]})
       digest.eval_loss += self.eval_loss.eval(feed_dict={self.encoding: expected[p], self.target: blurred[p + 2]})
@@ -383,7 +384,7 @@ class Autoencoder:
     #   digest.source = batch[1][:take]
     #   digest.reconstructed = self.decode.eval(feed_dict={self.input: batch[0]})[:take]
 
-    # Visualize various decondings
+    # Reconstruction visualizations
     for p in self._batch_permutation_generator(digest.size, shuffle=True, batches=1):
       digest.source = self.eval_decode.eval(feed_dict={self.encoding: expected[p]})[:take]
       digest.reconstructed = self.eval_decode.eval(feed_dict={self.encoding: average[p]})[:take]
@@ -460,10 +461,13 @@ class Autoencoder:
         'nois': self._add_decoding_summary('4_noisy', self.eval_decode)
       }
     # visualization
-    self.vis_placeholder = tf.placeholder(tf.uint8,  ut.fig2rgb_array(plt.figure(num=0)).shape)
+    fig = vis.get_figure()
+    fig.canvas.draw()
+    self.vis_placeholder = tf.placeholder(tf.uint8,  ut.fig2rgb_array(fig).shape)
     self.vis_summary = tf.summary.image('visualization', self.vis_placeholder)
     # embedding
     dists = l2(self.embedding_test[:-1] - self.embedding_test[1:])
+    self.dist = dists
     embedding_d_hist = tf.summary.histogram('point distance', dists)
     embedding_trajectory = tf.summary.scalar('trajectory_length', tf.reduce_sum(dists))
     self.blur_ph = tf.placeholder(dtype=tf.float32)
@@ -520,7 +524,6 @@ class Autoencoder:
     # SAVE
     if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.save_every):
       self.saver.save(sess, self.get_checkpoint_path())
-      self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
     # VISUALIZE
     if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.eval_every):
       evaluation = self.evaluate(sess, take=FLAGS.visualiza_max)
@@ -579,8 +582,8 @@ class Autoencoder:
 if __name__ == '__main__':
   args = dict([arg.split('=', maxsplit=1) for arg in sys.argv[1:]])
   if len(args) <= 1:
-    # FLAGS.input_path = '../data/tmp/romb8.5.6.tar.gz'
-    # FLAGS.test_path = '../data/tmp/romb8.5.6.tar.gz'
+    FLAGS.input_path = '../data/tmp/romb8.5.6.tar.gz'
+    FLAGS.test_path = '../data/tmp/romb8.5.6.tar.gz'
     FLAGS.test_max = 2178
     FLAGS.max_epochs = 5
     FLAGS.eval_every = 1
