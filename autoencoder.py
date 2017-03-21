@@ -77,6 +77,7 @@ def _fetch_dataset(path, take=None):
   dataset = dataset[:take]
   # print(dataset.dtype, dataset.shape, np.min(dataset), np.max(dataset))
   # dataset = inp.rescale_ds(dataset, 0, 1)
+  ut.print_info('DS fetch: %8d (%s)' % (len(dataset), path))
   return dataset
 
 
@@ -161,7 +162,7 @@ class Autoencoder:
     self.epoch_size = int(self.train_set.shape[0] / FLAGS.batch_size)
     self.batch_shape = [FLAGS.batch_size] + list(self.train_set.shape[1:])
 
-    self.test_set = _fetch_dataset(FLAGS.test_path)
+    self.test_set = _fetch_dataset(FLAGS.test_path) if FLAGS.test_path != FLAGS.input_path else self.train_set.copy()
     take_test = int(FLAGS.test_max) if FLAGS.test_max > 1 else int(FLAGS.test_max * len(self.test_set))
     self.test_set = self.test_set[:take_test]
 
@@ -387,6 +388,7 @@ class Autoencoder:
     # Reconstruction visualizations
     for p in self._batch_permutation_generator(digest.size, shuffle=True, batches=1):
       digest.source = self.eval_decode.eval(feed_dict={self.encoding: expected[p]})[:take]
+      digest.source = blurred[(p+2)[:take]]
       digest.reconstructed = self.eval_decode.eval(feed_dict={self.encoding: average[p]})[:take]
       self._eval_image_summaries(blurred[p], digest.encoded[p], average[p],  expected[p])
 

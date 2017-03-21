@@ -1,11 +1,12 @@
 import visualization as vi
 import utils as ut
-import DoomModel as dm
 import input as inp
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import os
+import sys
+import visualization as vis
 
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -112,35 +113,57 @@ def visualize_from_checkpoint(checkpoint, epoch=None):
 fast = True
 
 if __name__ == '__main__':
-  import sys
 
+  cwd = os.getcwd()
+  latest = ut.get_latest_file(os.getcwd(), filter=r'.*_suf\.encodings\.npy$')
+  print(latest)
+  data = np.load(latest).item()
+  # print(type(data))
+  # i = data.item()
+  # print(type(i))
+  # print(i.shape)
+  # print(data['enc'])
 
+  # print(data)
+  x = data['enc']
 
-  path = sys.argv[1] if len(sys.argv) > 1 \
-    else './tmp/ml__act|sigmoid__bs|30__h|500|10|500__init|na__inp|8pd3__lr|0.00003__opt|AO__seq|03'
-  epoch = int(sys.argv[2]) if len(sys.argv) > 2 else None
+  # print(x)
 
-  # path = './tmp/doom_bs__act|sigmoid__bs|30__h|500|12|500__init|na__inp|8pd3__lr|0.0004__opt|AO/'
+  fig = vis.plot_encoding_crosssection(
+    x,
+    '',
+    data['blu'],
+    data['rec'],
+    interactive=True)
+  fig.set_size_inches(fig.get_size_inches()[0] * 2, fig.get_size_inches()[1] * 2)
+  plt.tight_layout()
+  plt.show()
 
-  # import os
-  # print('really? ', )
-
-  if path is None:
-    ut.print_info('Visualizing latest file from visualization folder')
-    visualize_latest_from_visualization_folder()
-    exit(0)
-
-  is_embedding = '.txt' in path
-  if is_embedding:
-    ut.print_info('Visualizing encoding file')
-    visualize_latest_from_visualization_folder(file=path)
-    exit(0)
-
-  is_checkpoint = '/tmp' in path
-  if is_checkpoint:
-    print('so', path)
-    ut.print_info('Visualizing checkpoint data')
-    visualize_from_checkpoint(checkpoint=path, epoch=epoch)
-  else:
-    ut.print_info('Visualizing latest from folder', color=34)
-    visualize_latest_from_visualization_folder(folder=path)
+  # path = sys.argv[1] if len(sys.argv) > 1 \
+  #   else './tmp/ml__act|sigmoid__bs|30__h|500|10|500__init|na__inp|8pd3__lr|0.00003__opt|AO__seq|03'
+  # epoch = int(sys.argv[2]) if len(sys.argv) > 2 else None
+  #
+  # # path = './tmp/doom_bs__act|sigmoid__bs|30__h|500|12|500__init|na__inp|8pd3__lr|0.0004__opt|AO/'
+  #
+  # # import os
+  # # print('really? ', )
+  #
+  # if path is None:
+  #   ut.print_info('Visualizing latest file from visualization folder')
+  #   visualize_latest_from_visualization_folder()
+  #   exit(0)
+  #
+  # is_embedding = '.txt' in path
+  # if is_embedding:
+  #   ut.print_info('Visualizing encoding file')
+  #   visualize_latest_from_visualization_folder(file=path)
+  #   exit(0)
+  #
+  # is_checkpoint = '/tmp' in path
+  # if is_checkpoint:
+  #   print('so', path)
+  #   ut.print_info('Visualizing checkpoint data')
+  #   visualize_from_checkpoint(checkpoint=path, epoch=epoch)
+  # else:
+  #   ut.print_info('Visualizing latest from folder', color=34)
+  #   visualize_latest_from_visualization_folder(folder=path)

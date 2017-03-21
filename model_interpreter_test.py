@@ -76,11 +76,25 @@ def _test_multiple_decoders_unpool_wiring():
   decoder2 = build_decoder(enc_2, model2.config, reuse=True, masks=model2.mask_list)
 
 
+def _visualize_models():
+  input = tf.placeholder(tf.float32, (128, 160, 120, 4), name='input_fc')
+  model = build_autoencoder(input, 'f100-f3')
+  loss= l2_loss(input, model.decode, name='Loss_reconstruction_FC')
+
+  input = tf.placeholder(tf.float32, (128, 160, 120, 4), name='input_conv')
+  model = build_autoencoder(input, '16c3s2-32c3s2-32c3s2-16c3-f3')
+  loss= l2_loss(input, model.decode,  name='Loss_reconstruction_conv')
+
+  input = tf.placeholder(tf.float32, (128, 160, 120, 4), name='input_wwae')
+  model = build_autoencoder(input, '16c3-ap2-32c3-ap2-16c3-f3')
+  loss= l2_loss(input, model.decode, name='Loss_reconstruction_WWAE')
+
 
 if __name__ == '__main__':
   # print(re.match('\d+c\d+(s\d+)?[r|s|i|t]?', '8c3s2'))
   # model = build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3s2-16c3s2-30c3s2-16c3-f4')
-  _test_multiple_decoders_unpool_wiring()
+  # _test_multiple_decoders_unpool_wiring()
+  _visualize_models()
 
   # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '10c3-f100-f10')
   # _test_parameter_reuse_conv()

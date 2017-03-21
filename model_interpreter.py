@@ -45,7 +45,8 @@ def build_autoencoder(input, layer_config):
   if not reuse_model:
     layer_config = layer_config.split('-')
     layer_config = [parse_input(input)] + [parse(x) for x in layer_config]
-  ut.print_info('Model config:', color=CONFIG_COLOR)
+  if not reuse_model:
+    ut.print_info('Model config:', color=CONFIG_COLOR)
   enc = build_encoder(input, layer_config, reuse=reuse_model)
   dec = build_decoder(enc, layer_config, reuse=reuse_model)
   mask_list = clean_unpooling_masks(layer_config)
@@ -90,7 +91,8 @@ def build_encoder(net, layer_config, i=1, reuse=False):
 
   if not reuse:
     cfg.enc_op_name = net.name.split('/')[0]
-  ut.print_info('\rencoder_%d\t%s\t%s' % (i, str(net), cfg.enc_op_name), color=CONFIG_COLOR)
+  if not reuse:
+    ut.print_info('\rencoder_%d\t%s\t%s' % (i, str(net), cfg.enc_op_name), color=CONFIG_COLOR)
   return build_encoder(net, layer_config, i + 1, reuse=reuse)
 
 
@@ -127,7 +129,8 @@ def build_decoder(net, layer_config, i=None, reuse=False, masks=None):
     return net
   if not reuse:
     cfg.dec_op_name = net.name.split('/')[0]
-  ut.print_info('\rdecoder_%d \t%s' % (i, str(net)), color=CONFIG_COLOR)
+  if not reuse:
+    ut.print_info('\rdecoder_%d \t%s' % (i, str(net)), color=CONFIG_COLOR)
   return build_decoder(net, layer_config, i - 1, reuse=reuse, masks=masks)
 
 
@@ -136,8 +139,8 @@ def build_losses(layer_config):
 
 
 def l2_loss(arg1, arg2, alpha=1.0, name='reco_loss'):
-  with tf.name_scope('L2_loss'):
-    loss = tf.nn.l2_loss(arg1 - arg2, name=name)
+  with tf.name_scope(name):
+    loss = tf.nn.l2_loss(arg1 - arg2)
     return alpha * loss
 
 

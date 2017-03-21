@@ -226,9 +226,10 @@ def configure_folders(FLAGS):
   mkdir([TEMP_FOLDER, IMAGE_FOLDER, FLAGS.save_path, FLAGS.logdir])
 
   with open(os.path.join(FLAGS.save_path, '!note.txt'), "a") as f:
+    f.write('\n' + ' '.join(sys.argv) + '\n')
     f.write(print_flags(FLAGS, print=False))
     if len(FLAGS.comment) > 0:
-      f.write('\n\n' + FLAGS.comment)
+      f.write('\n\n%s\n' % FLAGS.comment)
 
 
 def get_latest_file(folder="./visualizations/", filter=None):
@@ -239,12 +240,11 @@ def get_latest_file(folder="./visualizations/", filter=None):
       files = [x for x in files if re.match(filter, x)]
     # print('\n\r'.join(files))
     for file in files:
-      if '.txt' in file:
-        file_path = os.path.join(root, file)
-        modification_time = os.path.getmtime(file_path)
-        if not latest_mod_time or modification_time > latest_mod_time:
-          latest_mod_time = modification_time
-          latest_file = file_path
+      file_path = os.path.join(root, file)
+      modification_time = os.path.getmtime(file_path)
+      if not latest_mod_time or modification_time > latest_mod_time:
+        latest_mod_time = modification_time
+        latest_file = file_path
   if latest_file is None:
     print_info('Could not find file matching %s' % str(filter))
   return latest_file
