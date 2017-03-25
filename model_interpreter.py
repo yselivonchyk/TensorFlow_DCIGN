@@ -66,6 +66,7 @@ def build_encoder(net, layer_config, i=1, reuse=False):
   cfg = layer_config[i]
   cfg.shape = net.get_shape().as_list()
   name = cfg.enc_op_name if reuse else None
+  cfg.ein = net
   if cfg.type == FC:
     if len(cfg.shape) > 2:
       net = slim.flatten(net)
@@ -83,7 +84,7 @@ def build_encoder(net, layer_config, i=1, reuse=False):
   elif cfg.type == POOL:
     net = slim.max_pool2d(net, kernel_size=[cfg.kernel, cfg.kernel], stride=cfg.kernel)
   elif cfg.type == DO:
-    print('dropout is decoder only')
+    net = tf.nn.dropout(net, keep_prob=cfg.keep_prob)
   elif cfg.type == LOSS:
     cfg.arg1 = net
   elif cfg.type == INPUT:
@@ -101,10 +102,12 @@ def build_decoder(net, layer_config, i=None, reuse=False, masks=None):
 
   cfg = layer_config[i]
   name = cfg.dec_op_name if reuse else None
-
   if len(layer_config) > i + 1:
     if len(layer_config[i + 1].shape) != len(net.get_shape().as_list()):
       net = tf.reshape(net, layer_config[i + 1].shape)
+
+  if i < 0 or layer_config[i].type == INPUT:
+    return net
 
   if cfg.type == FC:
     net = slim.fully_connected(net, int(np.prod(cfg.shape[1:])), scope=name,
@@ -118,20 +121,32 @@ def build_decoder(net, layer_config, i=None, reuse=False, masks=None):
       mask = cfg.argmax if cfg.argmax is not None else masks.pop()
       net = nut.unpool(net, mask=mask, stride=cfg.kernel)
     else:
-      net = nut.upsample(net, stride=cfg.kernel)
+      net = nut.upsample(net, stride=cfg.kernel, mode='COPY')
   elif cfg.type == POOL:
     net = nut.upsample(net, cfg.kernel)
   elif cfg.type == DO:
-    net = tf.nn.dropout(net, keep_prob=cfg.keep_prob)
+    pass
   elif cfg.type == LOSS:
     cfg.arg2 = net
   elif cfg.type == INPUT:
-    return net
+    assert False
   if not reuse:
     cfg.dec_op_name = net.name.split('/')[0]
   if not reuse:
     ut.print_info('\rdecoder_%d \t%s' % (i, str(net)), color=CONFIG_COLOR)
+  cfg.dout = net
   return build_decoder(net, layer_config, i - 1, reuse=reuse, masks=masks)
+
+
+def build_stacked_losses(model):
+  losses = []
+  for i, cfg in enumerate(model.config):
+    if cfg.type in [FC, CONV]:
+      input = tf.stop_gradient(cfg.ein, name='stacked_breakpoint_%d' % i)
+      net = build_encoder(input, [None, model.config[i]], reuse=True)
+      net = build_decoder(net, [model.config[i]], reuse=True)
+      losses.append(l2_loss(input, net, name='stacked_loss_%d' % i))
+  model.stacked_losses = losses
 
 
 def build_losses(layer_config):
@@ -205,6 +220,7 @@ def parse_input(input):
   item = _get_cfg_dummy()
   item.type = INPUT
   item.shape = input.get_shape().as_list()
+  item.dout = input
   return item
 
 

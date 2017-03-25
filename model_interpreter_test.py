@@ -90,11 +90,18 @@ def _visualize_models():
   loss= l2_loss(input, model.decode, name='Loss_reconstruction_WWAE')
 
 
+def _test_stacked_ae():
+  input = tf.placeholder(tf.float32, (2, 16, 16, 3), name='input')
+  model1 = build_autoencoder(input, 'f500-f100-f5')
+  losses = build_stacked_losses(model1)
+
+
 if __name__ == '__main__':
   # print(re.match('\d+c\d+(s\d+)?[r|s|i|t]?', '8c3s2'))
   # model = build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '8c3s2-16c3s2-30c3s2-16c3-f4')
   # _test_multiple_decoders_unpool_wiring()
-  _visualize_models()
+  # _visualize_models()
+  x = _test_stacked_ae()
 
   # build_autoencoder(tf.placeholder(tf.float32, (2, 16, 16, 3), name='input'), '10c3-f100-f10')
   # _test_parameter_reuse_conv()

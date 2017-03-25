@@ -23,14 +23,19 @@ from Bunch import Bunch
 
 tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'input folder')
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
-tf.app.flags.DEFINE_string('test_path', '../data/tmp/grid03.14.c.tar.gz', 'test set folder')
+tf.app.flags.DEFINE_string('test_path', '', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f100-f3', 'model configuration')
 tf.app.flags.DEFINE_string('model', 'pred', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
+
 tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
 tf.app.flags.DEFINE_float('beta', 0.0005, 'Reconstruction from noisy data loss weight')
 tf.app.flags.DEFINE_float('epsilon', 0.000001,
                           'Diameter of epsilon sphere comparing to distance to a neighbour. <= 0.5')
+tf.app.flags.DEFINE_float('gamma', 50., 'Loss weight for large distances')
+tf.app.flags.DEFINE_float('distance', 0.01, 'Maximum allowed interpoint distance')
+tf.app.flags.DEFINE_float('delta', 1., 'Loss weight for stacked objective')
+
 tf.app.flags.DEFINE_string('comment', '', 'Comment to leave by the model')
 
 
@@ -162,7 +167,8 @@ class Autoencoder:
     self.epoch_size = int(self.train_set.shape[0] / FLAGS.batch_size)
     self.batch_shape = [FLAGS.batch_size] + list(self.train_set.shape[1:])
 
-    self.test_set = _fetch_dataset(FLAGS.test_path) if FLAGS.test_path != FLAGS.input_path else self.train_set.copy()
+    reuse_train = FLAGS.test_path == FLAGS.input_path or FLAGS.test_path == ''
+    self.test_set = self.train_set.copy() if reuse_train else _fetch_dataset(FLAGS.test_path)
     take_test = int(FLAGS.test_max) if FLAGS.test_max > 1 else int(FLAGS.test_max * len(self.test_set))
     self.test_set = self.test_set[:take_test]
 
@@ -201,6 +207,7 @@ class Autoencoder:
         # print(self._last_blur, current_sigma)
         self._last_blur = current_sigma
         self._blurred_dataset = inp.apply_gaussian(self.train_set, sigma=current_sigma)
+        ut.print_info('blur s:%.1f[%.1f>%.1f]' % (current_sigma, self.train_set[2, 10, 10, 0], self._blurred_dataset[2, 10, 10, 0]))
       return self._blurred_dataset if self._blurred_dataset is not None else self.train_set
     return self.train_set
 
@@ -222,6 +229,7 @@ class Autoencoder:
     self.model = model
     self.encoding = tf.placeholder(self.encode.dtype, self.encode.get_shape(), name='encoding')
     eval_decode = interpreter.build_decoder(self.encoding, model.config, reuse=True)
+    print(target, eval_decode)
     self.eval_loss = interpreter.l2_loss(target, eval_decode, name='predictive_reconstruction')
     self.eval_decode = self._tensor_to_image(eval_decode)
 
@@ -248,18 +256,26 @@ class Autoencoder:
     pred_loss_2 = self._prediction_decode(models[1].encode*2 - models[0].encode, self.raw_targets[2], models[2])
     pred_loss_0 = self._prediction_decode(models[1].encode*2 - models[2].encode, self.raw_targets[0], models[0])
 
+    # build regularized distance objective
+    dist_loss1 = self._distance_loss(models[1].encode - models[0].encode)
+    dist_loss2 = self._distance_loss(models[1].encode - models[2].encode)
+
     # Stitch it all together and train
     self.loss_reco = tf.add_n(reco_losses)
     self.loss_pred = pred_loss_0 + pred_loss_2
+    self.loss_dist = dist_loss1 + dist_loss2
     self.losses = [self.loss_reco, self.loss_pred]
 
+  def _distance_loss(self, distances):
+    error = tf.nn.relu(l2(distances) - FLAGS.distance ** 2)
+    return tf.reduce_sum(error)
 
   def _prediction_decode(self, prediction, target, model):
     """Predict encoding t3 by encoding (t2 and t1) and expect a good reconstruction"""
     predict_decode = interpreter.build_decoder(prediction, self.model.config, reuse=True, masks=model.mask_list)
     predict_loss = 1./2 * interpreter.l2_loss(predict_decode, target, alpha=FLAGS.alpha)
     self.models += [predict_decode]
-    return predict_loss
+    return predict_loss * FLAGS.gamma
 
 
   def build_denoising_model(self):
@@ -270,7 +286,7 @@ class Autoencoder:
     loss1 = self._noisy_decode(models[1].encode, models[0].encode, models[1])
     loss2 = self._noisy_decode(models[1].encode, models[2].encode, models[1])
     self.loss_dn = loss2 + loss1
-    self.losses = [self.loss_reco, self.loss_pred, self.loss_dn]
+    self.losses = [self.loss_reco, self.loss_pred, self.loss_dist, self.loss_dn]
 
   def _noisy_decode(self, x1, x2, model):
     """Distort middle encoding with [<= 1/3*dist(neigbour)] and demand good reconstruction"""
@@ -328,7 +344,8 @@ class Autoencoder:
       try:
         for current_epoch in range(FLAGS.max_epochs):
           start = time.time()
-          ds = self._get_blurred_dataset()
+          full_set_blur = len(self.train_set) < 50000
+          ds = self._get_blurred_dataset() if full_set_blur else self.train_set
           if FLAGS.model == AUTOENCODER:
 
             # Autoencoder Training
@@ -344,6 +361,13 @@ class Autoencoder:
             # Predictive and Denoising training
             for batch_indexes in self._batch_permutation_generator(len(ds)-2):
               batch = np.stack((ds[batch_indexes], ds[batch_indexes + 1], ds[batch_indexes + 2]))
+              if not full_set_blur:
+                batch = np.stack((
+                  inp.apply_gaussian(ds[batch_indexes], sigma=self._get_blur_sigma()),
+                  inp.apply_gaussian(ds[batch_indexes+1], sigma=self._get_blur_sigma()),
+                  inp.apply_gaussian(ds[batch_indexes+2], sigma=self._get_blur_sigma())
+                ))
+
               summs, loss, _ = sess.run(
                 [self.summs_train, self.loss_total, self.train],
                 feed_dict={self.inputs: batch, self.targets: batch})
@@ -448,7 +472,7 @@ class Autoencoder:
   def _build_summaries(self):
     # losses
     with tf.name_scope('losses'):
-      loss_names = ['loss_autoencoder', 'loss_predictive', 'loss_denoising']
+      loss_names = ['loss_autoencoder', 'loss_predictive', 'loss_distance', 'loss_denoising']
       for i, loss in enumerate(self.losses):
         self._add_loss_summary(loss_names[i], loss)
       self._add_loss_summary('loss_total', self.loss_total)
@@ -497,8 +521,9 @@ class Autoencoder:
     sess.run(tf.variables_initializer([self.embedding_test], name='init_embeddings'))
 
   def _add_loss_summary(self, name, var, collection='train'):
-    tf.summary.scalar(name, var, [collection])
-    tf.summary.scalar('log_' + name, tf.log(var), [collection])
+    if var is not None:
+      tf.summary.scalar(name, var, [collection])
+      tf.summary.scalar('log_' + name, tf.log(var), [collection])
 
   def _restore_model(self, session):
     latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10], latest_filename='checkpoint')

@@ -126,7 +126,6 @@ def apply_gaussian(images, sigma):
   for i, image in enumerate(res):
     for channel in range(image.shape[-1]):
       image[:, :, channel] = filters.gaussian_filter(image[:, :, channel], sigma)
-  ut.print_info('blur s:%.1f[%.1f>%.1f]' % (sigma, images[2,10,10,0], res[2,10,10,0]))
   return res
 
 
