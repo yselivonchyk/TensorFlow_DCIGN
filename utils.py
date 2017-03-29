@@ -11,6 +11,7 @@ import sys
 import subprocess as sp
 import warnings
 import functools
+import scipy
 
 
 
@@ -512,6 +513,26 @@ def print_relevance_info(relevance, prefix='', labels=None):
 
 def disalbe_tensorflow_warnings():
   os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+
+@timeit
+def images_to_sprite(arr, path=None):
+  assert len(arr) <= 100*100
+  arr = arr[...,:3]
+  resized = [scipy.misc.imresize(x[..., :3], size=[80, 80]) for x in arr]
+  base = np.zeros([8000, 8000, 3], np.uint8)
+
+  for i in range(100):
+    for j in range(100):
+      index = j+100*i
+      if index < len(resized):
+        base[80*i:80*i+80, 80*j:80*j+80] = resized[index]
+  scipy.misc.imsave(path, base)
+
+
+def generate_tsv(num, path):
+  with open(path, mode='w') as f:
+    [f.write('%d\n' % i) for i in range(num)]
 
 
 if __name__ == '__main__':

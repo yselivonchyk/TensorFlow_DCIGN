@@ -40,7 +40,7 @@ tf.app.flags.DEFINE_string('comment', '', 'Comment to leave by the model')
 
 tf.app.flags.DEFINE_float('test_max', 10000, 'max number of examples in the test set')
 
-tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
+tf.app.flags.DEFINE_integer('max_epochs', 0, 'Train for at most this number of epochs')
 tf.app.flags.DEFINE_integer('save_every', 250, 'Save model state every INT epochs')
 tf.app.flags.DEFINE_integer('eval_every', 25, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_integer('visualiza_max', 10, 'Max pairs to show on visualization')
@@ -508,6 +508,9 @@ class Autoencoder:
     Hence, we build a separate variable with a separate saver."""
     embedding_shape = [int(len(self.test_set) / FLAGS.batch_size) * FLAGS.batch_size,
                        self.encode.get_shape().as_list()[1]]
+    sprite_path = os.path.join(FLAGS.logdir, 'sprite.png')
+    tsv_path = os.path.join(FLAGS.logdir, 'metadata.tsv')
+
     self.embedding_test_ph = tf.placeholder(tf.float32, embedding_shape, name='embedding')
     self.embedding_test = tf.Variable(tf.random_normal(embedding_shape), name='test_embedding', trainable=False)
     self.embedding_assign = self.embedding_test.assign(self.embedding_test_ph)
@@ -516,9 +519,15 @@ class Autoencoder:
     config = projector.ProjectorConfig()
     embedding = config.embeddings.add()
     embedding.tensor_name = self.embedding_test.name
-    # embedding.metadata_path = os.path.join(LOG_DIR, 'metadata.tsv')
+    embedding.sprite.image_path = sprite_path
+    embedding.sprite.single_image_dim.extend([80, 80])
+    embedding.metadata_path = './metadata.tsv'
     projector.visualize_embeddings(self.summary_writer, config)
     sess.run(tf.variables_initializer([self.embedding_test], name='init_embeddings'))
+
+    # build sprite image
+    ut.images_to_sprite(self.test_set, path=sprite_path)
+    ut.generate_tsv(len(self.test_set), tsv_path)
 
   def _add_loss_summary(self, name, var, collection='train'):
     if var is not None:
