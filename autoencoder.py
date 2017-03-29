@@ -38,7 +38,6 @@ tf.app.flags.DEFINE_float('delta', 1., 'Loss weight for stacked objective')
 
 tf.app.flags.DEFINE_string('comment', '', 'Comment to leave by the model')
 
-
 tf.app.flags.DEFINE_float('test_max', 10000, 'max number of examples in the test set')
 
 tf.app.flags.DEFINE_integer('max_epochs', 50, 'Train for at most this number of epochs')
@@ -170,6 +169,7 @@ class Autoencoder:
     reuse_train = FLAGS.test_path == FLAGS.input_path or FLAGS.test_path == ''
     self.test_set = self.train_set.copy() if reuse_train else _fetch_dataset(FLAGS.test_path)
     take_test = int(FLAGS.test_max) if FLAGS.test_max > 1 else int(FLAGS.test_max * len(self.test_set))
+    ut.print_info('take %d from test' % take_test)
     self.test_set = self.test_set[:take_test]
 
   def _batch_generator(self, x=None, y=None, shuffle=True, batches=None):
@@ -374,7 +374,7 @@ class Autoencoder:
               self._on_batch_finish(summs, loss)
 
           self._on_epoch_finish(current_epoch, start, sess)
-        self._on_training_finish()
+        self._on_training_finish(sess)
       except KeyboardInterrupt:
         self._on_training_abort(sess)
 
@@ -594,7 +594,9 @@ class Autoencoder:
     info_string = ' '.join([epoch_count, accuracy_info, time_info, loss_info])
     ut.print_time(info_string, same_line=True)
 
-  def _on_training_finish(self):
+  def _on_training_finish(self, sess):
+    if FLAGS.max_epochs == 0:
+      self._on_epoch_finish(self.get_past_epochs(), time.time(), sess)
     best_acc = np.min(self.stats.epoch_accuracy)
     ut.print_time('Best Quality: %f for %s' % (best_acc, FLAGS.net))
     self.summary_writer.close()

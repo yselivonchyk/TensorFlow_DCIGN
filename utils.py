@@ -1,18 +1,16 @@
 import datetime
 import time
-import numpy as np
 from matplotlib import pyplot as plt
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import collections
 import tensorflow as tf
-import pickle
 from scipy import misc
 import re
 import sys
 import subprocess as sp
 import warnings
 import functools
-# import scipy.stats as st
 
 
 
@@ -459,6 +457,61 @@ def configure_folders_2(FLAGS, meta):
   FLAGS.save_path = checkpoint_folder
   FLAGS.logdir = log_folder
   return checkpoint_folder, log_folder
+
+
+# precision/recall evaluation
+
+def evaluate_precision_recall(y, target, labels):
+  import sklearn.metrics as metrics
+  target = target[:len(y)]
+  num_classes = max(target) + 1
+  results = []
+  for i in range(num_classes):
+    class_target = _extract_single_class(i, target)
+    class_y = _extract_single_class(i, y)
+
+    results.append({
+      'precision': metrics.precision_score(class_target, class_y),
+      'recall': metrics.recall_score(class_target, class_y),
+      'f1': metrics.f1_score(class_target, class_y),
+      'fraction': sum(class_target)/len(target),
+      '#of_class': int(sum(class_target)),
+      'label': labels[i],
+      'label_id': i
+      # 'tp': tp
+    })
+    print('%d/%d' % (i, num_classes), results[-1])
+  accuracy = metrics.accuracy_score(target, y)
+  return accuracy, results
+
+
+def _extract_single_class(i, classes):
+  res, i = classes + 1, i + 1
+  res[res != i] = 0
+  res = np.asarray(res)
+  res = res / i
+  return res
+
+
+
+def print_relevance_info(relevance, prefix='', labels=None):
+  labels = labels if labels is not None else np.arange(len(relevance))
+  separator = '\n\t' if len(relevance) > 3 else ' '
+  result = '%s format: [" label": f1_score (precision recall) label_percentage]' % prefix
+  format = '\x1B[0m%s\t"%25s":\x1B[31;40m%.2f\x1B[0m (%.2f %.2f) %d%%'
+  for i, label_relevance in enumerate(relevance):
+    result += format % (separator,
+                        str(labels[i]),
+                        label_relevance['f1'],
+                        label_relevance['precision'],
+                        label_relevance['recall'],
+                        int(label_relevance['fraction']*10000)/100.
+                        )
+  print(result)
+
+
+def disalbe_tensorflow_warnings():
+  os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 if __name__ == '__main__':

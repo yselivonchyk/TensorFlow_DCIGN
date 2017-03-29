@@ -115,7 +115,8 @@ fast = True
 if __name__ == '__main__':
 
   cwd = os.getcwd()
-  latest = ut.get_latest_file(os.getcwd(), filter=r'.*_suf\.encodings\.npy$')
+  # cwd = '/mnt/code/vd/TensorFlow_DCIGN/tmp/pred.16c3s2_32c3s2_32c3s2_16c3_f80_f8__i_grid.28c.4'
+  latest = ut.get_latest_file(cwd, filter=r'.*_suf\.encodings\.npy$')
   print(latest)
   data = np.load(latest).item()
   # print(type(data))
@@ -136,7 +137,7 @@ if __name__ == '__main__':
     data['rec'],
     interactive=True)
   fig.set_size_inches(fig.get_size_inches()[0] * 2, fig.get_size_inches()[1] * 2)
-  plt.tight_layout()
+  # plt.tight_layout()
   plt.show()
 
   # path = sys.argv[1] if len(sys.argv) > 1 \
