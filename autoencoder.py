@@ -495,10 +495,16 @@ class Autoencoder:
     dists = l2(self.embedding_test[:-1] - self.embedding_test[1:])
     self.dist = dists
     embedding_d_hist = tf.summary.histogram('point distance', dists)
-    embedding_trajectory = tf.summary.scalar('trajectory_length', tf.reduce_sum(dists))
+    embedding_trajectory = tf.summary.scalar('training/trajectory_length', tf.reduce_sum(dists))
     self.blur_ph = tf.placeholder(dtype=tf.float32)
-    blur_summ = tf.summary.scalar('blur_sigma', self.blur_ph)
-    self.eval_summs = tf.summary.merge([embedding_d_hist, embedding_trajectory, blur_summ])
+    blur_summ = tf.summary.scalar('training/blur_sigma', self.blur_ph)
+
+    pred_error = self.embedding_test[1:-1]*2 - self.embedding_test[0:-2]
+    mean_dist, mean_pred_error = tf.reduce_mean(dists), tf.reduce_mean(pred_error)
+    dist_summ = tf.summary.scalar('training/avg_dist', mean_dist)
+    pred_erro_summ = tf.summary.scalar('training/pred_dist', mean_pred_error)
+    pred_metric = tf.summary.scalar('training/improvement',  (mean_dist-mean_pred_error)/mean_dist)
+    self.eval_summs = tf.summary.merge([embedding_d_hist, embedding_trajectory, blur_summ, dist_summ, pred_erro_summ, pred_metric])
 
 
   def _build_embedding_saver(self, sess):
@@ -508,7 +514,6 @@ class Autoencoder:
     Hence, we build a separate variable with a separate saver."""
     embedding_shape = [int(len(self.test_set) / FLAGS.batch_size) * FLAGS.batch_size,
                        self.encode.get_shape().as_list()[1]]
-    sprite_path = os.path.join(FLAGS.logdir, 'sprite.png')
     tsv_path = os.path.join(FLAGS.logdir, 'metadata.tsv')
 
     self.embedding_test_ph = tf.placeholder(tf.float32, embedding_shape, name='embedding')
@@ -519,14 +524,14 @@ class Autoencoder:
     config = projector.ProjectorConfig()
     embedding = config.embeddings.add()
     embedding.tensor_name = self.embedding_test.name
-    embedding.sprite.image_path = sprite_path
+    embedding.sprite.image_path = './sprite.png'
     embedding.sprite.single_image_dim.extend([80, 80])
     embedding.metadata_path = './metadata.tsv'
     projector.visualize_embeddings(self.summary_writer, config)
     sess.run(tf.variables_initializer([self.embedding_test], name='init_embeddings'))
 
     # build sprite image
-    ut.images_to_sprite(self.test_set, path=sprite_path)
+    ut.images_to_sprite(self.test_set, path=os.path.join(FLAGS.logdir, 'sprite.png'))
     ut.generate_tsv(len(self.test_set), tsv_path)
 
   def _add_loss_summary(self, name, var, collection='train'):
@@ -568,7 +573,7 @@ class Autoencoder:
         'rec': np.asarray(evaluation.reconstructed),
         'blu': np.asarray(evaluation.source)
       }
-      error_info = '%d(%d|%d|%d)' % (accuracy,
+      error_info = '%d(%d.%d.%d)' % (accuracy,
                                      evaluation.loss/evaluation.size,
                                      evaluation.eval_loss/evaluation.size,
                                      evaluation.dumb_loss/evaluation.size)
