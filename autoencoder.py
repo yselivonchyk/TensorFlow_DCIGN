@@ -25,7 +25,7 @@ tf.app.flags.DEFINE_string('input_path', '../data/tmp/grid03.14.c.tar.gz', 'inpu
 tf.app.flags.DEFINE_string('input_name', '', 'input folder')
 tf.app.flags.DEFINE_string('test_path', '', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f100-f3', 'model configuration')
-tf.app.flags.DEFINE_string('model', 'pred', 'Type of the model to use: Autoencoder (ae)'
+tf.app.flags.DEFINE_string('model', 'noise', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
 
 tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
@@ -388,7 +388,8 @@ class Autoencoder:
       encoding = self.encode.eval(feed_dict={self.input: batch[0]})
       digest.encoded = ut.concatenate(digest.encoded, encoding)
     # Save encoding for visualization
-    self.embedding_assign.eval(feed_dict={self.embedding_test_ph: digest.encoded})
+    encoded_no_nan = np.nan_to_num(digest.encoded)
+    self.embedding_assign.eval(feed_dict={self.embedding_test_ph: encoded_no_nan})
     self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
 
     # Calculate expected evaluation
@@ -494,17 +495,23 @@ class Autoencoder:
     # embedding
     dists = l2(self.embedding_test[:-1] - self.embedding_test[1:])
     self.dist = dists
-    embedding_d_hist = tf.summary.histogram('point distance', dists)
+    print(self.dist, dists)
+    embedding_d_hist = tf.summary.histogram('point_distance', dists)
     embedding_trajectory = tf.summary.scalar('training/trajectory_length', tf.reduce_sum(dists))
     self.blur_ph = tf.placeholder(dtype=tf.float32)
     blur_summ = tf.summary.scalar('training/blur_sigma', self.blur_ph)
 
-    pred_error = self.embedding_test[1:-1]*2 - self.embedding_test[0:-2]
+    pred = self.embedding_test[1:-1]*2 - self.embedding_test[0:-2]
+    pred_error = l2(pred - self.embedding_test[2:])
+
     mean_dist, mean_pred_error = tf.reduce_mean(dists), tf.reduce_mean(pred_error)
+    improvement = (mean_dist-mean_pred_error)/mean_dist
     dist_summ = tf.summary.scalar('training/avg_dist', mean_dist)
     pred_erro_summ = tf.summary.scalar('training/pred_dist', mean_pred_error)
-    pred_metric = tf.summary.scalar('training/improvement',  (mean_dist-mean_pred_error)/mean_dist)
-    self.eval_summs = tf.summary.merge([embedding_d_hist, embedding_trajectory, blur_summ, dist_summ, pred_erro_summ, pred_metric])
+    pred_metric = tf.summary.scalar('training/improvement',  improvement)
+    pred_metric_relu = tf.summary.scalar('training/improvement_abs',  tf.nn.relu(improvement))
+    self.eval_summs = tf.summary.merge([embedding_d_hist, embedding_trajectory, blur_summ,
+                                        dist_summ, pred_erro_summ, pred_metric, pred_metric_relu])
 
 
   def _build_embedding_saver(self, sess):
@@ -561,7 +568,7 @@ class Autoencoder:
   def _on_epoch_finish(self, epoch, start_time, sess):
     elapsed = time.time() - start_time
     self.epoch_stats.total_loss = guard_nan(self.epoch_stats.total_loss)
-    accuracy = 100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size)
+    accuracy = np.nan_to_num(100000 * np.sqrt(self.epoch_stats.total_loss / np.prod(self.batch_shape) / self.epoch_size))
     # SAVE
     if is_stopping_point(epoch, FLAGS.max_epochs, FLAGS.save_every):
       self.saver.save(sess, self.get_checkpoint_path())
@@ -573,10 +580,10 @@ class Autoencoder:
         'rec': np.asarray(evaluation.reconstructed),
         'blu': np.asarray(evaluation.source)
       }
-      error_info = '%d(%d.%d.%d)' % (accuracy,
-                                     evaluation.loss/evaluation.size,
-                                     evaluation.eval_loss/evaluation.size,
-                                     evaluation.dumb_loss/evaluation.size)
+      error_info = '%d(%d.%d.%d)' % (np.nan_to_num(accuracy),
+                                     np.nan_to_num(evaluation.loss)/evaluation.size,
+                                     np.nan_to_num(evaluation.eval_loss)/evaluation.size,
+                                     np.nan_to_num(evaluation.dumb_loss)/evaluation.size)
       meta = Bunch(suf='encodings', e='%06d' % int(self.get_past_epochs()), er=error_info)
       np.save(meta.to_file_name(folder=FLAGS.save_path), data)
       vis.plot_encoding_crosssection(

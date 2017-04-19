@@ -18,6 +18,7 @@ def calculate_error(ref, pred):
   error = np.mean(np.sqrt(error))
   return error
 
+
 def print_folder_metrics(path):
   enc = get_encodding(path)
   print()
@@ -34,10 +35,13 @@ def print_folder_metrics(path):
 
 
 if __name__ == '__main__':
+  print(sys.argv)
   if len(sys.argv) > 1:
     path = sys.argv[1]
     print('path', path)
+  else:
+    path = '/mnt/code/vd/TensorFlow_DCIGN/tmp/pred.f100_f3__i_romb8.5.6'
 
-  for p in ['/Volumes/unreliable/fire/VD_backup/tmp_epoch18_inputs/pred.16c3s2_32c3s2_32c3s2_16c3_f4__i_grid.28e.4',
-            '/Volumes/unreliable/fire/VD_backup/tmp_epoch18_inputs/pred.16c3s2_32c3s2_32c3s2_23c3_f3__i_romb8.5.6']:
-    print_folder_metrics(p)
+  # for p in ['/Volumes/unreliable/fire/VD_backup/tmp_epoch18_inputs/pred.16c3s2_32c3s2_32c3s2_16c3_f4__i_grid.28e.4',
+  #           '/Volumes/unreliable/fire/VD_backup/tmp_epoch18_inputs/pred.16c3s2_32c3s2_32c3s2_23c3_f3__i_romb8.5.6']:
+  print_folder_metrics(path)
