@@ -129,7 +129,7 @@ class Autoencoder:
   raw_inputs, raw_targets = None, None  # inputs in network-friendly representation
   models = None                         # Noise/Predictive interpreted models
 
-  optimizer, train = None, None
+  optimizer, _train = None, None
   loss_ae, loss_reco, loss_pred, loss_dn = None, None, None,  None   # Objectives
   loss_total = None
   losses = []
@@ -141,10 +141,11 @@ class Autoencoder:
   image_summaries = None
 
 
-  def __init__(self, optimizer=tf.train.AdamOptimizer):
+  def __init__(self, optimizer=tf.train.AdamOptimizer, need_forlders=True):
     self.optimizer_constructor = optimizer
     FLAGS.input_name = inp.get_input_name(FLAGS.input_path)
-    ut.configure_folders(FLAGS)
+    if need_forlders:
+      ut.configure_folders(FLAGS)
     ut.print_flags(FLAGS)
 
   # MISC
@@ -155,7 +156,14 @@ class Autoencoder:
 
   @staticmethod
   def get_checkpoint_path():
+    # print(os.path.join(FLAGS.save_path, CHECKPOINT_NAME), len(CHECKPOINT_NAME))
     return os.path.join(FLAGS.save_path, CHECKPOINT_NAME)
+
+  def get_latest_checkpoint(self):
+    return tf.train.latest_checkpoint(
+      self.get_checkpoint_path()[:-len(EMB_SUFFIX)],
+      latest_filename='checkpoint'
+    )
 
 
   # DATA
@@ -219,11 +227,11 @@ class Autoencoder:
     self.input = tf.placeholder(tf.uint8, self.batch_shape, name='input')
     self.target = tf.placeholder(tf.uint8, self.batch_shape, name='target')
     self.step = tf.Variable(0, trainable=False, name='global_step')
-
     root = self._image_to_tensor(self.input)
     target = self._image_to_tensor(self.target)
 
     model = interpreter.build_autoencoder(root, FLAGS.net)
+
     self.encode = model.encode
 
     self.model = model
@@ -321,7 +329,7 @@ class Autoencoder:
   def _init_optimizer(self):
     self.loss_total = tf.add_n(self.losses, 'loss_total')
     self.optimizer = self.optimizer_constructor(learning_rate=FLAGS.learning_rate)
-    self.train = self.optimizer.minimize(self.loss_total, global_step=self.step)
+    self._train = self.optimizer.minimize(self.loss_total, global_step=self.step)
 
 
 # MAIN
@@ -369,7 +377,7 @@ class Autoencoder:
                 ))
 
               summs, loss, _ = sess.run(
-                [self.summs_train, self.loss_total, self.train],
+                [self.summs_train, self.loss_total, self._train],
                 feed_dict={self.inputs: batch, self.targets: batch})
               self._on_batch_finish(summs, loss)
 
@@ -377,6 +385,35 @@ class Autoencoder:
         self._on_training_finish(sess)
       except KeyboardInterrupt:
         self._on_training_abort(sess)
+
+  def inference(self, max=10^6):
+    self.fetch_datasets()
+    self.build_ae_model()
+
+    with tf.Session() as sess:
+      sess.run(tf.global_variables_initializer())
+      # nut.print_model_info()
+      # nut.list_checkpoint_vars(self.get_latest_checkpoint().replace(EMB_SUFFIX, ''))
+
+      self.saver = tf.train.Saver()
+      self._restore_model(sess)
+      # nut.print_model_info()
+
+      encoding, decoding = None, None
+      for i in range(len(self.train_set)):
+        batch = np.expand_dims(self.train_set[i], axis=0)
+        enc, dec = sess.run(
+          [self.encode, self.decode],
+          feed_dict={self.input: batch}
+        )
+
+        # print(enc.shape, dec.shape)
+        encoding = enc if i == 0 else np.vstack((encoding, enc))
+        decoding = dec if i == 0 else np.vstack((decoding, dec))
+        print('\r%5d/%d' % (i, len(self.train_set)), end='')
+        if i >= max:
+          break
+      return encoding, decoding
 
   # @ut.timeit
   def evaluate(self, sess, take):
@@ -547,7 +584,8 @@ class Autoencoder:
       tf.summary.scalar('log_' + name, tf.log(var), [collection])
 
   def _restore_model(self, session):
-    latest_checkpoint = tf.train.latest_checkpoint(self.get_checkpoint_path()[:-10], latest_filename='checkpoint')
+    latest_checkpoint = self.get_latest_checkpoint()
+    print(latest_checkpoint)
     if latest_checkpoint is not None:
       latest_checkpoint = latest_checkpoint.replace(EMB_SUFFIX, '')
     ut.print_info("latest checkpoint: %s" % latest_checkpoint)
@@ -655,4 +693,4 @@ if __name__ == '__main__':
     FLAGS.model = DENOISING
   else:
     print('Do-di-li-doo doo-di-li-don')
-  model.train()
+  model._train()

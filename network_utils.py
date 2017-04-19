@@ -112,7 +112,9 @@ def print_model_info(trainable=False):
 
 
 def list_checkpoint_vars(folder):
+  # print(folder)
   f = ch_utils.list_variables(folder)
+  # print(f)
   print('\n'.join(map(str, f)))
 
 

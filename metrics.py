@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import utils as ut
 import sys
+import os
 
 def get_encodding(path):
   f = ut.get_latest_file(path, filter=r'.*.npy$')
@@ -42,6 +43,8 @@ if __name__ == '__main__':
   else:
     path = '/mnt/code/vd/TensorFlow_DCIGN/tmp/pred.f100_f3__i_romb8.5.6'
 
+  path = os.getcwd()
+  print(path)
   # for p in ['/Volumes/unreliable/fire/VD_backup/tmp_epoch18_inputs/pred.16c3s2_32c3s2_32c3s2_16c3_f4__i_grid.28e.4',
   #           '/Volumes/unreliable/fire/VD_backup/tmp_epoch18_inputs/pred.16c3s2_32c3s2_32c3s2_23c3_f3__i_romb8.5.6']:
   print_folder_metrics(path)
