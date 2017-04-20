@@ -154,3 +154,7 @@ def blur_gaussian(input, sigma, filter_size):
     kernel = tf.constant(kernel.flatten(), shape=kernel.shape, name='gauss_weight')
     output = tf.nn.depthwise_conv2d(input, kernel, [1, 1, 1, 1], padding='SAME')
     return output, kernel
+
+
+def nan_to_zero(tensor):
+  return tf.where(tf.is_nan(tensor), tf.zeros_like(tensor), tensor)

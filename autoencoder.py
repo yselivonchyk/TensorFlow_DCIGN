@@ -532,23 +532,31 @@ class Autoencoder:
     # embedding
     dists = l2(self.embedding_test[:-1] - self.embedding_test[1:])
     self.dist = dists
-    print(self.dist, dists)
-    embedding_d_hist = tf.summary.histogram('point_distance', dists)
-    embedding_trajectory = tf.summary.scalar('training/trajectory_length', tf.reduce_sum(dists))
+    metrics = []
+
+    metrics.append(tf.summary.histogram('point_distance', dists))
+    metrics.append(tf.summary.scalar('training/trajectory_length', tf.reduce_sum(dists)))
     self.blur_ph = tf.placeholder(dtype=tf.float32)
-    blur_summ = tf.summary.scalar('training/blur_sigma', self.blur_ph)
+    metrics.append(tf.summary.scalar('training/blur_sigma', self.blur_ph))
 
     pred = self.embedding_test[1:-1]*2 - self.embedding_test[0:-2]
     pred_error = l2(pred - self.embedding_test[2:])
 
     mean_dist, mean_pred_error = tf.reduce_mean(dists), tf.reduce_mean(pred_error)
     improvement = (mean_dist-mean_pred_error)/mean_dist
-    dist_summ = tf.summary.scalar('training/avg_dist', mean_dist)
-    pred_erro_summ = tf.summary.scalar('training/pred_dist', mean_pred_error)
-    pred_metric = tf.summary.scalar('training/improvement',  improvement)
-    pred_metric_relu = tf.summary.scalar('training/improvement_abs',  tf.nn.relu(improvement))
-    self.eval_summs = tf.summary.merge([embedding_d_hist, embedding_trajectory, blur_summ,
-                                        dist_summ, pred_erro_summ, pred_metric, pred_metric_relu])
+
+    pairwise_improvement = tf.nn.relu(dists[1:] - pred_error)
+    pairwise_improvement_bool = tf.cast(pairwise_improvement > 0, pairwise_improvement.dtype)
+    self.pairwise_improvement_bool = pairwise_improvement_bool
+
+    metrics.append(tf.summary.scalar('training/avg_dist', mean_dist))
+    metrics.append(tf.summary.scalar('training/pred_dist', mean_pred_error))
+    metrics.append(tf.summary.scalar('training/improvement', improvement))
+    metrics.append(tf.summary.scalar('training/improvement_abs', tf.nn.relu(improvement)))
+    metrics.append(tf.summary.histogram('training/improvement_abs_hist', nut.nan_to_zero(improvement)))
+    metrics.append(tf.summary.scalar('training/improvement_pairwise', tf.reduce_mean(pairwise_improvement_bool)))
+    metrics.append(tf.summary.histogram('training/improvement_pairwise_hist', pairwise_improvement_bool))
+    self.eval_summs = tf.summary.merge(metrics)
 
 
   def _build_embedding_saver(self, sess):
@@ -693,4 +701,4 @@ if __name__ == '__main__':
     FLAGS.model = DENOISING
   else:
     print('Do-di-li-doo doo-di-li-don')
-  model._train()
+  model.train()
