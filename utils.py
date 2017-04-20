@@ -231,6 +231,16 @@ def configure_folders(FLAGS):
       f.write('\n\n%s\n' % FLAGS.comment)
 
 
+def get_files(folder="./visualizations/", filter=None):
+  all = []
+  for root, dirs, files in os.walk(folder):
+    # print(root, dirs, files)
+    if filter:
+      files = [x for x in files if re.match(filter, x)]
+    all += files
+  return [os.path.join(folder, x) for x in all]
+
+
 def get_latest_file(folder="./visualizations/", filter=None):
   latest_file, latest_mod_time = None, None
   for root, dirs, files in os.walk(folder):

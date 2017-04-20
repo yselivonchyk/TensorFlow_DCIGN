@@ -4,6 +4,7 @@ import utils as ut
 import sys
 import os
 
+
 def get_encodding(path):
   f = ut.get_latest_file(path, filter=r'.*.npy$')
   print(f)
@@ -58,7 +59,7 @@ def nn_metric(point_array):
       total += 1
     # print(i, i-1 in indexes, i+1 in indexes, indexes)
   metric = total/(len(point_array) - 2) / 2
-  print('NN metric: %.7f%%' % (metric * 100))
+  # print('NN metric: %.7f%%' % (metric * 100))
   return metric
 
 
@@ -77,7 +78,7 @@ def nn_metric_pred(prediction, target):
     if i == index:
       total += 1
   metric = total/len(target)
-  print('NN metric for preditcion: %.7f%%' % (metric * 100))
+  # print('NN metric for preditcion: %.7f%%' % (metric * 100))
   return metric
 
 
@@ -105,28 +106,18 @@ def print_folder_metrics(path):
   # print(enc[0], enc[1], pred[0], enc[2])
 
   pred_to_target_dist, next_dist = distance(ref, pred), distance(enc[1:-1], enc[2:])
-  print(distance_improvement(pred_to_target_dist, next_dist))
-  print(distance_binary_improvement(pred_to_target_dist, next_dist))
-  print('NN metric:', nn_metric(enc))
-  print('NN metric:', nn_metric(enc))
-  print('NN metric for prediction:', nn_metric_pred(pred, ref))
+  distance_improvement(pred_to_target_dist, next_dist)
+  distance_binary_improvement(pred_to_target_dist, next_dist)
+  print('NN metric:: %.f%%' % (nn_metric(enc)*100))
+  print('NN metric for prediction: %.f%%' % (nn_metric_pred(pred, ref)*100))
 
 
 if __name__ == '__main__':
-  # print(sys.argv)
-  # if len(sys.argv) > 1:
-  #   path = sys.argv[1]
-  #   print('path', path)
-  # else:
-  #   path = '/home/eugene/repo/TensorFlow_DCIGN/tmp/noise.f20_f4__i_grid03.14.c'
-
   path = os.getcwd()
   if 'TensorFlow_DCIGN' in os.getcwd().split('/')[-1]:
-    path = '/home/eugene/repo/TensorFlow_DCIGN/tmp/noise.f20_f4__i_grid03.14.c'
+    # path = '/home/eugene/repo/TensorFlow_DCIGN/tmp/noise.f20_f4__i_grid03.14.c'
+    path = '/mnt/code/vd/TensorFlow_DCIGN/tmp/pred.f101_f3__i_romb8.5.6'
 
-  print(path)
-  # for p in ['/Volumes/unreliable/fire/VD_backup/tmp_epoch18_inputs/pred.16c3s2_32c3s2_32c3s2_16c3_f4__i_grid.28e.4',
-  #           '/Volumes/unreliable/fire/VD_backup/tmp_epoch18_inputs/pred.16c3s2_32c3s2_32c3s2_23c3_f3__i_romb8.5.6']:
   test_nn()
   test_nn_pred()
   print_folder_metrics(path)
