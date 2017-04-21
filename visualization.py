@@ -10,6 +10,8 @@ import sys
 import utils as ut
 import time
 import tensorflow as tf
+import matplotlib.ticker as ticker
+
 
 # Next line to silence pyflakes. This import is needed.
 Axes3D
@@ -246,16 +248,13 @@ def _reshape_column_image(column_picture, height, proportion=1):
 figure_shape = [3095, 2352, 3]
 
 
-def get_figure(fig=None):
+def get_figure(fig=None, shape=figure_shape):
   if fig is not None:
     return fig
   dpi = 300.
-  fig = plt.figure(num=0, figsize=[figure_shape[0]/dpi, figure_shape[1]/dpi], dpi=dpi)
+  fig = plt.figure(num=0, figsize=[shape[0]/dpi, shape[1]/dpi], dpi=dpi)
   fig.clf()
   return fig
-
-
-import matplotlib.ticker as ticker
 
 
 def _plot_single_cross_section(data, select, subplot):
@@ -502,7 +501,7 @@ def _duplicate_array_repeat(array, repeats=None, total_length=None):
 
 def _build_radial_colors(length):
   colors = np.arange(0, 180)
-  colors = np.concatenate((colors, colors[::-1]))
+  # colors = np.concatenate((colors, colors[::-1]))
   colors = _duplicate_array_repeat(colors, total_length=length)
   return colors
 

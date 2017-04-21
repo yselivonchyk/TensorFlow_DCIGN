@@ -5,7 +5,7 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import numpy as np
 import tensorflow as tf
 import utils as ut
@@ -28,6 +28,7 @@ tf.app.flags.DEFINE_string('test_path', '', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f100-f3', 'model configuration')
 tf.app.flags.DEFINE_string('model', 'noise', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
+tf.app.flags.DEFINE_string('postfix', 'alpha', 'Postfix for the training folder')
 
 tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
 tf.app.flags.DEFINE_float('beta', 0.0005, 'Reconstruction from noisy data loss weight')
@@ -140,6 +141,7 @@ class Autoencoder:
 
   vis_summary, vis_placeholder = None, None
   image_summaries = None
+  visualization_batch_perm = None
 
 
   def __init__(self, optimizer=tf.train.AdamOptimizer, need_forlders=True):
@@ -428,7 +430,10 @@ class Autoencoder:
     # Save encoding for visualization
     encoded_no_nan = np.nan_to_num(digest.encoded)
     self.embedding_assign.eval(feed_dict={self.embedding_test_ph: encoded_no_nan})
-    self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
+    # try:
+    #   self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
+    # except:
+    #   ut.print_info("Unexpected error: %s" % str(sys.exc_info()[0]), color=33)
 
     # Calculate expected evaluation
     expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
@@ -450,6 +455,8 @@ class Autoencoder:
 
     # Reconstruction visualizations
     for p in self._batch_permutation_generator(digest.size, shuffle=True, batches=1):
+      self.visualization_batch_perm = self.visualization_batch_perm if self.visualization_batch_perm is not None else p
+      p = self.visualization_batch_perm
       digest.source = self.eval_decode.eval(feed_dict={self.encoding: expected[p]})[:take]
       digest.source = blurred[(p+2)[:take]]
       digest.reconstructed = self.eval_decode.eval(feed_dict={self.encoding: average[p]})[:take]
@@ -632,6 +639,7 @@ class Autoencoder:
                                      np.nan_to_num(evaluation.eval_loss)/evaluation.size,
                                      np.nan_to_num(evaluation.dumb_loss)/evaluation.size)
       meta = Bunch(suf='encodings', e='%06d' % int(self.get_past_epochs()), er=error_info)
+      print(data, meta.to_file_name(folder=FLAGS.save_path))
       np.save(meta.to_file_name(folder=FLAGS.save_path), data)
       vis.plot_encoding_crosssection(
         evaluation.encoded,
@@ -685,6 +693,7 @@ if __name__ == '__main__':
     FLAGS.max_epochs = 5
     FLAGS.eval_every = 1
     FLAGS.save_every = 1
+    FLAGS.batch_size = 32
     FLAGS.blur = 0.0
 
     # FLAGS.model = 'noise'
