@@ -191,7 +191,7 @@ if __name__ == '__main__':
     eval = get_evaluation(path)
     enc = eval['enc']
 
-    fig = vis.get_figure(shape=[1000, 2000, 3])
+    fig = vis.get_figure(shape=[1800, 900, 3])
     # ax =
     plot_single_cross_section_3d(enc, [0, 1, 2], plt.subplot(121, projection='3d'))
     plot_single_cross_section_line(enc, [0, 1, 2], plt.subplot(122, projection='3d'))

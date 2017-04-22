@@ -176,6 +176,8 @@ class Autoencoder:
 
 
   def fetch_datasets(self):
+    if FLAGS.max_epochs == 0:
+      FLAGS.input_path = FLAGS.test_path
     self.train_set = _fetch_dataset(FLAGS.input_path)
     self.epoch_size = int(self.train_set.shape[0] / FLAGS.batch_size)
     self.batch_shape = [FLAGS.batch_size] + list(self.train_set.shape[1:])
@@ -431,10 +433,10 @@ class Autoencoder:
     # Save encoding for visualization
     encoded_no_nan = np.nan_to_num(digest.encoded)
     self.embedding_assign.eval(feed_dict={self.embedding_test_ph: encoded_no_nan})
-    # try:
-    #   self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
-    # except:
-    #   ut.print_info("Unexpected error: %s" % str(sys.exc_info()[0]), color=33)
+    try:
+      self.embedding_saver.save(sess, self.get_checkpoint_path() + EMB_SUFFIX)
+    except:
+      ut.print_info("Unexpected error: %s" % str(sys.exc_info()[0]), color=33)
 
     # Calculate expected evaluation
     expected = digest.encoded[1:-1]*2 - digest.encoded[:-2]
