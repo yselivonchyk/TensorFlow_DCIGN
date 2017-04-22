@@ -43,7 +43,8 @@ def clean_unpooling_masks(layer_config):
 def build_autoencoder(input, layer_config):
   reuse_model = isinstance(layer_config, list)
   if not reuse_model:
-    layer_config = layer_config.split('-')
+    layer_config
+    layer_config = layer_config.replace('_', '-').split('-')
     layer_config = [parse_input(input)] + [parse(x) for x in layer_config]
   if not reuse_model:
     ut.print_info('Model config:', color=CONFIG_COLOR)

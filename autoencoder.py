@@ -28,7 +28,7 @@ tf.app.flags.DEFINE_string('test_path', '', 'test set folder')
 tf.app.flags.DEFINE_string('net', 'f100-f3', 'model configuration')
 tf.app.flags.DEFINE_string('model', 'noise', 'Type of the model to use: Autoencoder (ae)'
                                                'WhatWhereAe (ww) U-netAe (u)')
-tf.app.flags.DEFINE_string('postfix', 'alpha', 'Postfix for the training folder')
+tf.app.flags.DEFINE_string('postfix', '', 'Postfix for the training folder')
 
 tf.app.flags.DEFINE_float('alpha', 10, 'Predictive reconstruction loss weight')
 tf.app.flags.DEFINE_float('beta', 0.0005, 'Reconstruction from noisy data loss weight')
@@ -294,12 +294,10 @@ class Autoencoder:
 
     # build denoising objective
     models = self.models
-    loss1 = self._noisy_decode(models[1].encode, models[0].encode, models[1])
-    loss2 = self._noisy_decode(models[1].encode, models[2].encode, models[1])
-    self.loss_dn = loss2 + loss1
+    self.loss_dn = self._noisy_decode(models[1])
     self.losses = [self.loss_reco, self.loss_pred, self.loss_dist, self.loss_dn]
 
-  def _noisy_decode(self, x1, x2, model):
+  def _noisy_decode(self, model):
     """Distort middle encoding with [<= 1/3*dist(neigbour)] and demand good reconstruction"""
     # dist = l2(x1 - x2)
     # noise = dist * self.epsilon_sphere_noise()
@@ -308,7 +306,7 @@ class Autoencoder:
     noisy_encoding = noise + self.models[1].encode
     tf.stop_gradient(noisy_encoding)  # or maybe here, who knows
     noisy_decode = interpreter.build_decoder(noisy_encoding, model.config, reuse=True, masks=model.mask_list)
-    loss = 1./2 * interpreter.l2_loss(noisy_decode, self.raw_targets[1], alpha=FLAGS.beta)
+    loss = interpreter.l2_loss(noisy_decode, self.raw_targets[1], alpha=FLAGS.beta)
     self.models += [noisy_decode]
     return loss
 
@@ -639,7 +637,7 @@ class Autoencoder:
                                      np.nan_to_num(evaluation.eval_loss)/evaluation.size,
                                      np.nan_to_num(evaluation.dumb_loss)/evaluation.size)
       meta = Bunch(suf='encodings', e='%06d' % int(self.get_past_epochs()), er=error_info)
-      print(data, meta.to_file_name(folder=FLAGS.save_path))
+      # print(data, meta.to_file_name(folder=FLAGS.save_path))
       np.save(meta.to_file_name(folder=FLAGS.save_path), data)
       vis.plot_encoding_crosssection(
         evaluation.encoded,

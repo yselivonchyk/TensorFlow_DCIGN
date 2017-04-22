@@ -143,6 +143,7 @@ def plot_single_cross_section_3d(data, select, subplot):
                   c=vis._build_radial_colors(len(d)),
                   marker=".",
                   cmap=plt.cm.hsv)
+  subplot.plot(data[:, 0], data[:, 1], data[:, 2], color='black', lw=0.2, alpha=0.9)
 
   subplot.set_xlim([-0.01, 1.01])
   subplot.set_ylim([-0.01, 1.01])
@@ -155,134 +156,58 @@ def plot_single_cross_section_3d(data, select, subplot):
   subplot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
 
 
-# def plot_single_cross_section_2d(data, select, subplot):
-#   d = data
-#   subplot.scatter(d[:, 0], d[:, 1], s=4, alpha=1.0, lw=0.5,
-#                   c=vis._build_radial_colors(len(d)),
-#                   marker=".",
-#                   cmap=plt.cm.hsv)
-#
-#   # subplot.set_xlim([-0.01, 1.01])
-#   # subplot.set_ylim([-0.01, 1.01])
-#   subplot.xaxis.set_ticks([])
-#   subplot.yaxis.set_ticks([])
-#   # subplot.xaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
-#   # subplot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
+def plot_single_cross_section_line(data, select, subplot):
+  data = data[:, select]
+  # subplot.scatter(data[:, 0], data[:, 1], s=20, lw=0, edgecolors='none', alpha=1.0,
+  # subplot.plot(data[:, 0], data[:, 1], data[:, 2], color='black', lw=1, alpha=0.4)
 
+  d = data
+  # subplot.plot(d[[-1, 0], 0], d[[-1, 0], 1], d[[-1, 0], 2], lw=1, alpha=0.8, color='red')
+  # subplot.scatter(d[[-1, 0], 0], d[[-1, 0], 1], d[[-1, 0], 2], lw=10, alpha=0.3, marker=".", color='b')
+  d = data
+  subplot.plot(data[:, 0], data[:, 1], data[:, 2], color='black', lw=1, alpha=0.4)
 
-# def generate():
-#   res = []
-#   res += right(0, 0)
-#   res += down(res[-1][0], res[-1][1])
-#   res += right(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#   res += right(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#   res += right(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#   res += right(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#
-#   res += right(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#   res += right(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#   res += right(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#
-#   res += left(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#   res += left(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#
-#   res += left(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#   res += left(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#   res += left(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#   res += left(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#   res += left(res[-1][0], res[-1][1])
-#   res += down(res[-1][0], res[-1][1])
-#
-#   res += left(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#   res += left(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#   res += left(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#
-#   res += right(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#   res += right(res[-1][0], res[-1][1])
-#   res += up(res[-1][0], res[-1][1])
-#
-#   return res
-#
-# n = 50
-#
-# def left(x, y):
-#   res = []
-#   for i in range(n):
-#     x, y = x-1, y
-#     res.append((x, y))
-#   return res
-#
-# def right(x, y):
-#   res = []
-#   for i in range(n):
-#     x, y = x+1, y
-#     res.append((x, y))
-#   return res
-#
-# def up(x, y):
-#   res = []
-#   for i in range(n):
-#     x, y = x, y+1
-#     res.append((x, y))
-#   return res
-#
-# def down(x, y):
-#   res = []
-#   for i in range(n):
-#     x, y = x, y-1
-#     res.append((x, y))
-#   return res
-#
-#
-# def reference():
-#   global res, fig, ax
-#   res = generate()
-#   res = np.asarray(res)
-#   print(res.shape)
-#   print(res)
-#   fig = vis.get_figure(shape=[1000, 1000, 3])
-#   ax = plt.subplot(111)
-#   plot_single_cross_section_2d(res, [0, 1], ax)
-#   plt.tight_layout()
-#   plt.show()
-#   exit(0)
+  subplot.set_xlim([-0.01, 1.01])
+  subplot.set_ylim([-0.01, 1.01])
+  subplot.set_zlim([-0.01, 1.01])
+  ticks = []
+  subplot.xaxis.set_ticks(ticks)
+  subplot.yaxis.set_ticks(ticks)
+  subplot.zaxis.set_ticks(ticks)
+  subplot.xaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
+  subplot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%1.0f'))
 
 
 if __name__ == '__main__':
   path = os.getcwd()
 
-  if 'tmp_epoch' in os.getcwd():
+  for _, paths, _ in os.walk(path):
+    print('dirs', paths)
+    break
 
+  if len(paths) == 0:
+    print_folder_metrics(path)
+
+    eval = get_evaluation(path)
+    enc = eval['enc']
+
+    fig = vis.get_figure(shape=[1000, 2000, 3])
+    # ax =
+    plot_single_cross_section_3d(enc, [0, 1, 2], plt.subplot(121, projection='3d'))
+    plot_single_cross_section_line(enc, [0, 1, 2], plt.subplot(122, projection='3d'))
+    plt.tight_layout()
+    plt.show()
+  else:
     res = []
-    for root, dirs, files in os.walk(path):
-      if len(dirs) == 0:
-        break
-      for d in dirs + [path]:
-        print(d)
-        c_path = os.path.join(path, d)
-        info = print_folder_metrics(c_path)
-        res.append('\n%30s:\n%s' % (d, info))
-      res = sorted(res)
-      print('\n'.join(res))
-      print(len(dirs), len(res))
-      exit(0)
+    for d in paths + [path]:
+      print(d)
+      c_path = os.path.join(path, d)
+      info = print_folder_metrics(c_path)
+      res.append('\n%30s:\n%s' % (d, info))
+    res = sorted(res)
+    print('\n'.join(res))
+    print(len(paths), len(res))
+    exit(0)
 
 
   if 'TensorFlow_DCIGN' in os.getcwd().split('/')[-1]:
@@ -291,15 +216,4 @@ if __name__ == '__main__':
     path = '/media/eugene/back up/VD_backup/tmp_epoch20_final/pred.16c3s2_32c3s2_32c3s2_23c3_f3__i_romb8.5.6_'
     # path = '/media/eugene/back up/VD_backup/tmp_epoch19_inputs/pred.16c3s2_32c3s2_32c3s2_16c3_f100_f3__i_grid.28.gh.360'
 
-  test_nn()
-  test_nn_pred()
-  print_folder_metrics(path)
-  eval = get_evaluation(path)
-  enc = eval['enc']
 
-  fig = vis.get_figure(shape=[1000, 1000, 3])
-  ax = plt.subplot(111, projection='3d')
-  plot_single_cross_section_3d(enc, [0, 1, 1], ax)
-  plt.tight_layout()
-
-  plt.show()
