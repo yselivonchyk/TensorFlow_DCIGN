@@ -47,6 +47,7 @@ tf.app.flags.DEFINE_integer('save_every', 250, 'Save model state every INT epoch
 tf.app.flags.DEFINE_integer('eval_every', 25, 'Save encoding and visualizations every')
 tf.app.flags.DEFINE_integer('visualiza_max', 10, 'Max pairs to show on visualization')
 tf.app.flags.DEFINE_boolean('load_state', True, 'Load state if possible ')
+tf.app.flags.DEFINE_boolean('kill_depth', False, 'Ignore depth information')
 tf.app.flags.DEFINE_boolean('dev', False, 'Indicate development mode')
 tf.app.flags.DEFINE_integer('batch_size', 128, 'Batch size')
 tf.app.flags.DEFINE_float('learning_rate', 0.0001, 'Create visualization of ')
@@ -83,6 +84,8 @@ def _fetch_dataset(path, take=None):
   dataset = dataset[:take]
   # print(dataset.dtype, dataset.shape, np.min(dataset), np.max(dataset))
   # dataset = inp.rescale_ds(dataset, 0, 1)
+  if FLAGS.kill_depth:
+    dataset[..., -1] = 0
   ut.print_info('DS fetch: %8d (%s)' % (len(dataset), path))
   return dataset
 
