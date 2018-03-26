@@ -12,6 +12,7 @@ import subprocess as sp
 import warnings
 import functools
 import scipy
+import random
 
 
 
@@ -544,6 +545,18 @@ def images_to_sprite(arr, path=None):
 def generate_tsv(num, path):
   with open(path, mode='w') as f:
     [f.write('%d\n' % i) for i in range(num)]
+
+
+def paste_patch(patch, base_size=40, upper_half=True):
+  channels = patch.shape[-1]
+  base = np.zeros((base_size, base_size, channels), dtype=np.uint8)
+
+  position_x = random.randint(0, base_size - patch.shape[0])
+  position_y = random.randint(0, base_size / 2 - patch.shape[1])
+  if not upper_half: position_y += int(base_size / 2)
+
+  base[position_x:position_x + patch.shape[0], position_y:position_y + patch.shape[1], :] = patch
+  return base
 
 
 if __name__ == '__main__':
